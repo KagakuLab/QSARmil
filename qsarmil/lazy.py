@@ -6,9 +6,24 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import pandas as pd
 import psutil
-from milearn.network.classifier import AdditiveAttentionNetworkClassifier
 from milearn.network.module.hopt import DEFAULT_PARAM_GRID
-from milearn.network.regressor import AdditiveAttentionNetworkRegressor
+
+from milearn.network.classifier import (BagNetworkClassifier,
+                                        InstanceNetworkClassifier,
+                                        AdditiveAttentionNetworkClassifier,
+                                        SelfAttentionNetworkClassifier,
+                                        HopfieldAttentionNetworkClassifier,
+                                        DynamicPoolingNetworkClassifier,
+                                        )
+
+from milearn.network.regressor import (BagNetworkRegressor,
+                                        InstanceNetworkRegressor,
+                                        AdditiveAttentionNetworkRegressor,
+                                        SelfAttentionNetworkRegressor,
+                                        HopfieldAttentionNetworkRegressor,
+                                        DynamicPoolingNetworkRegressor,
+                                        )
+
 # preprocessing
 from milearn.preprocessing import BagMinMaxScaler
 from milearn.wrapper import BagWrapper, InstanceWrapper
@@ -54,9 +69,13 @@ REGRESSORS = {
     "MeanInstanceWrapperLinearSVRRegressor": InstanceWrapper(LinearSVR(), pool="mean"),
     "MeanInstanceWrapperXGBRegressor": InstanceWrapper(XGBRegressor(), pool="mean"),
     "MeanInstanceWrapperMLPRegressor": InstanceWrapper(MLPRegressor(), pool="mean"),
-    #
-    # attention mil networks
+    # mil networks
+    "MeanBagNetworkRegressor": BagNetworkRegressor(pool="mean"),
+    "MeanInstanceNetworkRegressor": InstanceNetworkRegressor(pool="mean"),
     "AdditiveAttentionNetworkRegressor": AdditiveAttentionNetworkRegressor(),
+    "SelfAttentionNetworkRegressor": SelfAttentionNetworkRegressor(),
+    "HopfieldAttentionNetworkRegressor": HopfieldAttentionNetworkRegressor(),
+    "DynamicPoolingNetworkRegressor": DynamicPoolingNetworkRegressor(),
 }
 
 CLASSIFIERS = {
@@ -70,8 +89,13 @@ CLASSIFIERS = {
     "MeanInstanceWrapperLinearSVCClassifier": InstanceWrapper(LinearSVC(), pool="mean"),
     "MeanInstanceWrapperXGBClassifier": InstanceWrapper(XGBClassifier(), pool="mean"),
     "MeanInstanceWrapperMLPClassifier": InstanceWrapper(MLPClassifier(), pool="mean"),
-    # attention mil networks
+    # mil networks
+    "MeanBagNetworkClassifier": BagNetworkClassifier(pool="mean"),
+    "MeanInstanceNetworkClassifier": InstanceNetworkClassifier(pool="mean"),
     "AdditiveAttentionNetworkClassifier": AdditiveAttentionNetworkClassifier(),
+    "SelfAttentionNetworkClassifier": SelfAttentionNetworkClassifier(),
+    "HopfieldAttentionNetworkClassifier": HopfieldAttentionNetworkClassifier(),
+    "DynamicPoolingNetworkClassifier": DynamicPoolingNetworkClassifier(),
 }
 
 
