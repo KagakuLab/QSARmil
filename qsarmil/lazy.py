@@ -6,7 +6,6 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import pandas as pd
 import psutil
-from milearn.network.module.hopt import DEFAULT_PARAM_GRID
 
 from milearn.network.classifier import (BagNetworkClassifier,
                                         InstanceNetworkClassifier,
@@ -17,17 +16,18 @@ from milearn.network.classifier import (BagNetworkClassifier,
                                         )
 
 from milearn.network.regressor import (BagNetworkRegressor,
-                                        InstanceNetworkRegressor,
-                                        AdditiveAttentionNetworkRegressor,
-                                        SelfAttentionNetworkRegressor,
-                                        HopfieldAttentionNetworkRegressor,
-                                        DynamicPoolingNetworkRegressor,
+                                       InstanceNetworkRegressor,
+                                       AdditiveAttentionNetworkRegressor,
+                                       SelfAttentionNetworkRegressor,
+                                       HopfieldAttentionNetworkRegressor,
+                                       DynamicPoolingNetworkRegressor,
                                         )
 
 # preprocessing
 from milearn.preprocessing import BagMinMaxScaler
 from milearn.wrapper import BagWrapper, InstanceWrapper
 from molfeat.calc import ElectroShapeDescriptors, Pharmacophore3D, USRDescriptors
+
 # descriptors
 from rdkit import Chem, RDLogger
 from sklearn.linear_model import Ridge, RidgeClassifier
@@ -39,7 +39,7 @@ from qsarmil.conformer.rdkit import RDKitConformerGenerator
 from qsarmil.descriptor.rdkit import RDKitAUTOCORR, RDKitGEOM, RDKitGETAWAY, RDKitMORSE, RDKitRDF, RDKitWHIM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 
-from .utils.logging import OutputSuppressor
+from qsarmil.utils.logging import OutputSuppressor
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -59,16 +59,9 @@ DESCRIPTORS = {
 }
 
 REGRESSORS = {
-    # classic wrappers
-    "MeanBagWrapperRidgeRegressor": BagWrapper(Ridge(), pool="mean"),
-    "MeanBagWrapperLinearSVRRegressor": BagWrapper(LinearSVR(), pool="mean"),
-    "MeanBagWrapperXGBRegressor": BagWrapper(XGBRegressor(), pool="mean"),
-    "MeanBagWrapperMLPRegressor": BagWrapper(MLPRegressor(), pool="mean"),
-    # classic wrappers
-    "MeanInstanceWrapperRidgeRegressor": InstanceWrapper(Ridge(), pool="mean"),
-    "MeanInstanceWrapperLinearSVRRegressor": InstanceWrapper(LinearSVR(), pool="mean"),
-    "MeanInstanceWrapperXGBRegressor": InstanceWrapper(XGBRegressor(), pool="mean"),
-    "MeanInstanceWrapperMLPRegressor": InstanceWrapper(MLPRegressor(), pool="mean"),
+    # mil wrappers
+    "MeanInstanceWrapperMLPNetworkRegressor": InstanceWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanBagWrapperMLPNetworkRegressor": BagWrapperMLPNetworkRegressor(pool="mean"),
     # mil networks
     "MeanBagNetworkRegressor": BagNetworkRegressor(pool="mean"),
     "MeanInstanceNetworkRegressor": InstanceNetworkRegressor(pool="mean"),
@@ -78,17 +71,10 @@ REGRESSORS = {
     "DynamicPoolingNetworkRegressor": DynamicPoolingNetworkRegressor(),
 }
 
-CLASSIFIERS = {
-    # classic wrappers
-    "MeanBagWrapperRidgeClassifier": BagWrapper(RidgeClassifier(), pool="mean"),
-    "MeanBagWrapperLinearSVCClassifier": BagWrapper(LinearSVC(), pool="mean"),
-    "MeanBagWrapperXGBClassifier": BagWrapper(XGBClassifier(), pool="mean"),
-    "MeanBagWrapperMLPClassifier": BagWrapper(MLPClassifier(), pool="mean"),
-    # classic wrappers
-    "MeanInstanceWrapperRidgeClassifier": InstanceWrapper(RidgeClassifier(), pool="mean"),
-    "MeanInstanceWrapperLinearSVCClassifier": InstanceWrapper(LinearSVC(), pool="mean"),
-    "MeanInstanceWrapperXGBClassifier": InstanceWrapper(XGBClassifier(), pool="mean"),
-    "MeanInstanceWrapperMLPClassifier": InstanceWrapper(MLPClassifier(), pool="mean"),
+CLASSIFIERS =  {
+    # mil wrappers
+    "MeanInstanceWrapperMLPNetworkClassifier": InstanceWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanBagWrapperMLPNetworkClassifier": BagWrapperMLPNetworkClassifier(pool="mean"),
     # mil networks
     "MeanBagNetworkClassifier": BagNetworkClassifier(pool="mean"),
     "MeanInstanceNetworkClassifier": InstanceNetworkClassifier(pool="mean"),
@@ -98,27 +84,21 @@ CLASSIFIERS = {
     "DynamicPoolingNetworkClassifier": DynamicPoolingNetworkClassifier(),
 }
 
+DEFAULT_PARAM_GRID = {
+    # Fixed hparams
+    "max_epochs": 1000,
+    "early_stopping": True,
+    "accelerator": "cpu",
+    "random_seed": 42,
+    "verbose": False,
+    "hidden_layer_sizes": [(2048, 1024, 512, 256, 128, 64), (256, 128, 64), (128,)],
+    "activation": ["relu", "leakyrelu", "gelu", "elu", "silu"],
+    "learning_rate": [10e-5, 10e-4],
+}
 
 # ==========================================================
 # Utility Functions
 # ==========================================================
-def _worker(func, args, kwargs):
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        return {"error": repr(e)}
-
-
-def run_in_subprocess(func, *args, **kwargs):
-    with ProcessPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_worker, func, args, kwargs)
-        result = future.result()
-
-    if isinstance(result, dict) and "error" in result:
-        raise RuntimeError(result["error"])
-
-    return result
-
 
 def gen_conformers(smi_list, num_conf=10, num_cpu=1, verbose=False):
     """Generate conformers for a list of SMILES strings using
@@ -130,7 +110,6 @@ def gen_conformers(smi_list, num_conf=10, num_cpu=1, verbose=False):
     conf_gen = RDKitConformerGenerator(num_conf=num_conf, num_cpu=num_cpu, verbose=verbose)
     conf_list = conf_gen.run(mol_list)
     return conf_list
-
 
 def clean_descriptors(bags):
     """Replace NaN values in each bag's instances with the column means
@@ -152,19 +131,16 @@ def clean_descriptors(bags):
 
     return cleaned_bags
 
-
 def calc_descriptors(conf_list, calculator, verbose=False):
     calculator.verbose = verbose
     x = calculator.run(conf_list)
     x = clean_descriptors(x)
     return x
 
-
 def scale_descriptors(x_train, x_test):
     scaler = BagMinMaxScaler()
     scaler.fit(x_train)
     return scaler.transform(x_train), scaler.transform(x_test)
-
 
 # ==========================================================
 # ModelBuilder Class
@@ -184,7 +160,7 @@ def build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator_instan
     pred_val = list(estimator_instance.predict(x_val_scaled))
 
     # 5. Retrain model on full (train + val)
-    x_full, y_full = x_train + x_val, np.hstack((y_train, y_val))
+    x_full, y_full = np.vstack([x_train, x_val]), np.hstack((y_train, y_val))
     x_full_scaled, x_test_scaled = scale_descriptors(x_full, x_test)
     estimator_instance.fit(x_full_scaled, y_full)
     pred_test = list(estimator_instance.predict(x_test_scaled))
@@ -245,8 +221,8 @@ class LazyMIL:
 
                 start = time.time()
                 with OutputSuppressor() as logger:
-                    pred_train, pred_val, pred_test = run_in_subprocess(
-                        build_model, x_train, x_val, x_test, y_train, y_val, y_test, estimator, self.hopt
+                    pred_train, pred_val, pred_test = build_model(
+                        x_train, x_val, x_test, y_train, y_val, y_test, estimator, self.hopt
                     )
                 elapsed_min = (time.time() - start) / 60
 
