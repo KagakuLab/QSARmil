@@ -10,12 +10,11 @@ RDLogger.DisableLog("rdApp.*")
 
 class MultiConformerModel:
 
-    def __init__(self, num_conf=10, task="regression", hopt=False, num_cpu=20, output_folder=None, verbose=True):
+    def __init__(self, num_conf=10, hopt=False, num_cpu=20, output_folder=None, verbose=True):
         super().__init__()
 
         self.num_conf = num_conf
         self.num_cpu = num_cpu
-        self.task = task
         self.hopt = hopt
         self.output_folder = output_folder
         self.verbose = verbose
@@ -30,9 +29,8 @@ class MultiConformerModel:
         df_train, df_val = train_test_split(df_train, test_size=0.2, random_state=42)
 
         # 3. Build multiple models
-        lazy_ml = LazyMIL(
-            task=self.task, hopt=self.hopt, output_folder=self.output_folder, num_cpu=self.num_cpu, verbose=self.verbose
-        )
+        lazy_ml = LazyMIL(num_conf=self.num_conf, hopt=self.hopt,
+                          num_cpu=self.num_cpu, output_folder=self.output_folder, verbose=self.verbose)
         lazy_ml.run(df_train, df_val, df_test)
 
         # 4. Load individual model predictions

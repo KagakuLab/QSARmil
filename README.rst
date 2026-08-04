@@ -28,7 +28,7 @@ the corresponding target property values.
 
      from qsarmil.meta import MultiConformerModel
 
-     model = MultiConformerModel(num_conf=10, hopt=True, task="regression", output_folder="mcf", verbose=True)
+     model = MultiConformerModel(num_conf=10, hopt=True, output_folder="mcf", verbose=True)
      y_pred = model.run_predict(df_train, df_test)
 
 Use cases

@@ -23,6 +23,9 @@ from milearn.network.regressor import (BagNetworkRegressor,
                                        DynamicPoolingNetworkRegressor,
                                         )
 
+from milearn.network.regressor import InstanceWrapperMLPNetworkRegressor, BagWrapperMLPNetworkRegressor
+from milearn.network.classifier import InstanceWrapperMLPNetworkClassifier, BagWrapperMLPNetworkClassifier
+
 # preprocessing
 from milearn.preprocessing import BagMinMaxScaler
 from milearn.wrapper import BagWrapper, InstanceWrapper
@@ -40,6 +43,7 @@ from qsarmil.descriptor.rdkit import RDKitAUTOCORR, RDKitGEOM, RDKitGETAWAY, RDK
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 
 from qsarmil.utils.logging import OutputSuppressor
+from sklearn.utils.multiclass import type_of_target
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -170,14 +174,12 @@ def build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator_instan
 
 class LazyMIL:
 
-    def __init__(self, task="regression", hopt=True, num_conf=10, num_cpu=20, output_folder=None, verbose=True):
-        self.task = task
+    def __init__(self, hopt=True, num_conf=10, num_cpu=20, output_folder=None, verbose=True):
         self.hopt = hopt
         self.num_conf = num_conf
         self.output_folder = output_folder
         self.num_cpu = num_cpu
         self.verbose = verbose
-        self.estimators_dict = REGRESSORS if self.task == "regression" else CLASSIFIERS
 
         if self.output_folder and os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
@@ -198,23 +200,32 @@ class LazyMIL:
         smi_test, y_test = list(df_test.iloc[:, 0]), list(df_test.iloc[:, 1])
         result_df_test["SMILES"], result_df_test["Y_TRUE"] = smi_test, y_test
 
-        # 2. Generate conformers
+        # 2. Get a task type
+        task_type = type_of_target(y_train)
+        if task_type == "continuous":
+            estimators_dict = REGRESSORS
+        elif task_type == "binary":
+            estimators_dict = CLASSIFIERS
+        else:
+            raise ValueError("Task type not supported.")
+
+        # 3. Generate conformers
         conf_train = gen_conformers(smi_train, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose)
         conf_val = gen_conformers(smi_val, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose)
         conf_test = gen_conformers(smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose)
 
-        total_models = len(DESCRIPTORS) * len(self.estimators_dict)
+        total_models = len(DESCRIPTORS) * len(estimators_dict)
         current_model = 0
 
-        # 3. Calculate descriptors
+        # 4. Calculate descriptors
         for desc_name, desc_calc in DESCRIPTORS.items():
 
             x_train = list(calc_descriptors(conf_train, desc_calc, verbose=False))
             x_val = list(calc_descriptors(conf_val, desc_calc, verbose=False))
             x_test = list(calc_descriptors(conf_test, desc_calc, verbose=False))
 
-            # 4. Train models
-            for est_name, estimator in self.estimators_dict.items():
+            # 5. Train models
+            for est_name, estimator in estimators_dict.items():
 
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
@@ -226,7 +237,7 @@ class LazyMIL:
                     )
                 elapsed_min = (time.time() - start) / 60
 
-                # 5. Write predictions
+                # 6. Write predictions
                 result_df_train[model_name] = pred_train
                 result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
 
