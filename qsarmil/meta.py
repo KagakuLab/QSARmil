@@ -44,8 +44,7 @@ class MultiConformerModel:
         if self.verbose:
             print("\nRunning genetic consensus search ...")
 
-        cons_search = GeneticSearch(cons_size="auto", metric="auto", n_iter=50)
-        # cons_search = SystematicSearch(cons_size="auto", metric="auto")
+        cons_search = GeneticSearch(cons_size="auto", n_iter=50)
 
         best_cons = cons_search.run(x_val, true_val)
         pred_test = cons_search.predict(x_test[best_cons])
