@@ -19,7 +19,14 @@ MolOrFailed = Union[Mol, None, FailedMolecule, FailedConformer]
 class ConformerGenerator:
     """Generate and optimize molecular conformers with optional filtering."""
 
-    def __init__(self, num_conf: int = 10, e_thresh: float | None = None, num_cpu: int = 1, verbose: bool = True) -> None:
+    def __init__(
+        self,
+        num_conf: int = 10,
+        e_thresh: float | None = None,
+        num_cpu: int = 1,
+        verbose: bool = True,
+        seed: int = 42,
+    ) -> None:
         """Store the generation settings used by every run() call.
 
         Args:
@@ -29,6 +36,7 @@ class ConformerGenerator:
             num_cpu (int): Number of threads to use when generating conformers
                 in parallel.
             verbose (bool): Whether to print a progress indicator.
+            seed (int): Random seed for conformer embedding.
         """
         super().__init__()
 
@@ -36,6 +44,7 @@ class ConformerGenerator:
         self.e_thresh = e_thresh
         self.num_cpu = num_cpu
         self.verbose = verbose
+        self.seed = seed
 
     def _prepare_molecule(self, mol: Mol | None) -> Mol:
         """Prepare a molecule by adding explicit hydrogens."""
@@ -46,7 +55,7 @@ class ConformerGenerator:
         """Generate multiple 3D conformers for a molecule."""
         mol = self._prepare_molecule(mol)
         params = AllChem.ETKDGv3()
-        params.randomSeed = 42
+        params.randomSeed = self.seed
         AllChem.EmbedMultipleConfs(mol, numConfs=self.num_conf, params=params)
         return mol
 

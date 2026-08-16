@@ -4,7 +4,6 @@ import os
 import shutil
 import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor
 from typing import Any, Iterable
 
 import numpy as np
@@ -111,7 +110,7 @@ DEFAULT_PARAM_GRID = {
 # ==========================================================
 
 def gen_conformers(
-    smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = 1, verbose: bool = False
+    smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = 1, verbose: bool = False, seed: int = 42
 ) -> list[ConformerEnsemble]:
     """Generate conformers for a list of SMILES strings using
     RDKitConformerGenerator."""
@@ -119,19 +118,30 @@ def gen_conformers(
     for smi in smi_list:
         mol = Chem.MolFromSmiles(smi)
         mol_list.append(mol)
-    conf_gen = RDKitConformerGenerator(num_conf=num_conf, num_cpu=num_cpu, verbose=verbose)
+    conf_gen = RDKitConformerGenerator(num_conf=num_conf, num_cpu=num_cpu, verbose=verbose, seed=seed)
     conf_list = conf_gen.run(mol_list)
     return conf_list
 
-def clean_descriptors(bags: list[np.ndarray]) -> list[np.ndarray]:
-    """Replace NaN values in each bag's instances with the column means
-    computed across all instances."""
+def compute_column_means(bags: list[np.ndarray]) -> np.ndarray:
+    """Compute per-column, NaN-ignoring means across every instance in every bag."""
 
-    # Concatenate all instances from all bags into one 2D array
     all_instances = np.vstack(bags)
+    return np.nanmean(all_instances, axis=0)
 
-    # Compute column means ignoring NaNs
-    col_means = np.nanmean(all_instances, axis=0)
+def clean_descriptors(bags: list[np.ndarray], col_means: np.ndarray | None = None) -> list[np.ndarray]:
+    """Replace NaN values in each bag's instances with column means.
+
+    Args:
+        bags (list[np.ndarray]): Descriptor bags to clean.
+        col_means (np.ndarray, optional): Per-column means to impute with.
+            If omitted, computed from ``bags`` themselves.
+
+    Returns:
+        list[np.ndarray]: Cleaned descriptor bags.
+    """
+
+    if col_means is None:
+        col_means = compute_column_means(bags)
 
     # Replace NaNs in each bag with the corresponding column mean
     cleaned_bags = []
@@ -143,13 +153,20 @@ def clean_descriptors(bags: list[np.ndarray]) -> list[np.ndarray]:
 
     return cleaned_bags
 
-def calc_descriptors(conf_list: list[ConformerEnsemble], calculator: DescriptorWrapper, verbose: bool = False) -> list[np.ndarray]:
+def calc_descriptors(
+    conf_list: list[ConformerEnsemble],
+    calculator: DescriptorWrapper,
+    verbose: bool = False,
+    col_means: np.ndarray | None = None,
+) -> list[np.ndarray]:
     """Compute and NaN-clean descriptor bags for a list of conformer ensembles.
 
     Args:
         conf_list (list[ConformerEnsemble]): Per-molecule conformer ensembles.
         calculator (DescriptorWrapper): Descriptor calculator to apply.
         verbose (bool): Whether the calculator should print progress.
+        col_means (np.ndarray, optional): Column means to impute NaNs with.
+            If omitted, means are computed from this call's own output.
 
     Returns:
         list[np.ndarray]: One cleaned descriptor bag per molecule. Assumes
@@ -160,7 +177,7 @@ def calc_descriptors(conf_list: list[ConformerEnsemble], calculator: DescriptorW
     """
     calculator.verbose = verbose
     x: list[Any] = calculator.run(conf_list)
-    x = clean_descriptors(x)
+    x = clean_descriptors(x, col_means=col_means)
     return x
 
 def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
@@ -189,6 +206,7 @@ def build_model(
     y_test: Iterable[Any],
     estimator_instance: Any,
     hopt: bool = True,
+    seed: int = 42,
 ) -> tuple[list[Any], list[Any], list[Any]]:
     """Fit one estimator and return its predictions on train/val/test.
 
@@ -207,6 +225,8 @@ def build_model(
             and optionally ``hopt`` for hyperparameter search.
         hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting,
             if the estimator supports it.
+        seed (int): Random seed passed to the estimator's hyperparameter
+            search, overriding ``DEFAULT_PARAM_GRID``'s own default.
 
     Returns:
         tuple[list, list, list]: ``(pred_train, pred_val, pred_test)``.
@@ -217,7 +237,8 @@ def build_model(
 
     # 2. Optimize hyperparameters
     if hopt and hasattr(estimator_instance, "hopt"):
-        estimator_instance.hopt(x_train_scaled, y_train, param_grid=DEFAULT_PARAM_GRID, verbose=False)
+        param_grid = {**DEFAULT_PARAM_GRID, "random_seed": seed}
+        estimator_instance.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
 
     # 4. Train on train split only (not final training yet)
     estimator_instance.fit(x_train_scaled, y_train)
@@ -250,6 +271,7 @@ class LazyMIL:
         num_cpu: int = 20,
         output_folder: str | None = None,
         verbose: bool = True,
+        seed: int = 42,
     ) -> None:
         """Set up the run and (re)create the output folder.
 
@@ -262,12 +284,15 @@ class LazyMIL:
                 CSVs are written to. If omitted, a fresh temporary directory
                 is created. If it already exists, it's wiped and recreated.
             verbose (bool): Whether to print per-model progress and memory usage.
+            seed (int): Random seed used for conformer embedding, molecule
+                validation, and hyperparameter search.
         """
         self.hopt = hopt
         self.num_conf = num_conf
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.num_cpu = num_cpu
         self.verbose = verbose
+        self.seed = seed
 
         if os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
@@ -291,7 +316,7 @@ class LazyMIL:
 
         # 1. Drop molecules that don't parse/sanitize/embed in 3D, so one
         #    bad SMILES doesn't crash the whole run
-        validator = DataValidator(num_cpu=self.num_cpu, verbose=self.verbose)
+        validator = DataValidator(num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed)
         df_train = validator.filter_dataframe(df_train)
         df_val = validator.filter_dataframe(df_val)
         df_test = validator.filter_dataframe(df_test)
@@ -316,22 +341,32 @@ class LazyMIL:
         elif task_type == "binary":
             estimators_dict = CLASSIFIERS
         else:
-            raise ValueError("Task type not supported.")
+            raise ValueError(
+                f"Task type '{task_type}' not supported (only 'continuous' and 'binary' targets are supported)."
+            )
 
         # 4. Generate conformers
-        conf_train = gen_conformers(smi_train, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose)
-        conf_val = gen_conformers(smi_val, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose)
-        conf_test = gen_conformers(smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose)
+        conf_train = gen_conformers(
+            smi_train, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
+        )
+        conf_val = gen_conformers(
+            smi_val, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
+        )
+        conf_test = gen_conformers(
+            smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
+        )
 
         total_models = len(DESCRIPTORS) * len(estimators_dict)
         current_model = 0
 
-        # 5. Calculate descriptors
+        # 5. Calculate descriptors, imputing val/test NaNs with train's own
+        #    column means
         for desc_name, desc_calc in DESCRIPTORS.items():
 
             x_train = list(calc_descriptors(conf_train, desc_calc, verbose=False))
-            x_val = list(calc_descriptors(conf_val, desc_calc, verbose=False))
-            x_test = list(calc_descriptors(conf_test, desc_calc, verbose=False))
+            train_col_means = compute_column_means(x_train)
+            x_val = list(calc_descriptors(conf_val, desc_calc, verbose=False, col_means=train_col_means))
+            x_test = list(calc_descriptors(conf_test, desc_calc, verbose=False, col_means=train_col_means))
 
             # 6. Train models
             for est_name, estimator in estimators_dict.items():
@@ -342,7 +377,7 @@ class LazyMIL:
                 start = time.time()
                 with OutputSuppressor() as logger:
                     pred_train, pred_val, pred_test = build_model(
-                        x_train, x_val, x_test, y_train, y_val, y_test, estimator, self.hopt
+                        x_train, x_val, x_test, y_train, y_val, y_test, estimator, self.hopt, seed=self.seed
                     )
                 elapsed_min = (time.time() - start) / 60
 

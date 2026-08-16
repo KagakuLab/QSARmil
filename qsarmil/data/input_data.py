@@ -13,16 +13,18 @@ RDLogger.DisableLog("rdApp.*")
 class DataValidator:
     """Fast parallel SMILES validator + 3D conformer check using RDKit."""
 
-    def __init__(self, num_cpu: int = -1, verbose: bool = True) -> None:
+    def __init__(self, num_cpu: int = -1, verbose: bool = True, seed: int = 42) -> None:
         """Store the validation settings.
 
         Args:
             num_cpu (int): Number of parallel jobs to use (joblib convention,
                 -1 means use all available cores).
             verbose (bool): Whether to print which rows got dropped and why.
+            seed (int): Random seed for the trial conformer embedding.
         """
         self.num_cpu = num_cpu
         self.verbose = verbose
+        self.seed = seed
 
     def _validate_one(self, smiles: str) -> dict[str, Any]:
         """Run one SMILES through parsing, sanitization and a conformer check.
@@ -70,7 +72,7 @@ class DataValidator:
         try:
 
             params = AllChem.ETKDGv3()
-            params.randomSeed = 42
+            params.randomSeed = self.seed
 
             conf_id = AllChem.EmbedMolecule(mol, params)
             if conf_id == -1:

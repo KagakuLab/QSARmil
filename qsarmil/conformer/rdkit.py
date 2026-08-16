@@ -14,9 +14,17 @@ class RDKitConformerGenerator(ConformerGenerator):
         e_thresh (float, optional): Energy threshold for filtering high-energy conformers.
         num_cpu (int): Number of CPU threads to use for parallel processing.
         verbose (bool): Whether to display a progress bar during generation.
+        seed (int): Random seed for conformer embedding.
     """
 
-    def __init__(self, num_conf: int = 10, e_thresh: float | None = None, num_cpu: int = 1, verbose: bool = True) -> None:
+    def __init__(
+        self,
+        num_conf: int = 10,
+        e_thresh: float | None = None,
+        num_cpu: int = 1,
+        verbose: bool = True,
+        seed: int = 42,
+    ) -> None:
         """Initialize RDKitConformerGenerator with generation parameters.
 
         Args:
@@ -24,5 +32,6 @@ class RDKitConformerGenerator(ConformerGenerator):
             e_thresh (float, optional): Energy threshold for filtering high-energy conformers.
             num_cpu (int): Number of CPU threads to use for parallel processing.
             verbose (bool): Whether to display a progress bar during generation.
+            seed (int): Random seed for conformer embedding.
         """
-        super().__init__(num_conf=num_conf, e_thresh=e_thresh, num_cpu=num_cpu, verbose=verbose)
+        super().__init__(num_conf=num_conf, e_thresh=e_thresh, num_cpu=num_cpu, verbose=verbose, seed=seed)
