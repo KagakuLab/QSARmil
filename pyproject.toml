@@ -21,7 +21,7 @@ dependencies = [
         "py3Dmol",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["ruff", "mypy", "pytest", "pytest-cov"]
 
 [tool.setuptools.packages.find]

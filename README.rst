@@ -35,3 +35,31 @@ Use cases
 --------------------------
 
 See the examples of ``QSARmil`` application for different tasks in the `tutorial collection <notebooks>`_ .
+
+Development
+--------------------------
+
+To set up a development environment, clone the repository and install it in
+editable mode along with the ``dev`` dependency group (``ruff``, ``mypy``,
+``pytest``, ``pytest-cov``):
+
+.. code-block:: bash
+
+    git clone https://github.com/KagakuLab/QSARmil.git
+    cd QSARmil
+    pip install -e . --group dev
+
+``--group`` requires pip 25.1 or newer (``pip install --upgrade pip`` if needed).
+
+Run the test suite (coverage is reported automatically):
+
+.. code-block:: bash
+
+    pytest
+
+Lint and type-check:
+
+.. code-block:: bash
+
+    ruff check .
+    mypy qsarmil
