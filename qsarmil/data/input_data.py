@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any, Iterable
+
 import pandas as pd
 from joblib import Parallel, delayed
 from rdkit import Chem, RDLogger
@@ -9,7 +13,7 @@ RDLogger.DisableLog("rdApp.*")
 class DataValidator:
     """Fast parallel SMILES validator + 3D conformer check using RDKit."""
 
-    def __init__(self, num_cpu: int = -1, verbose: bool = True):
+    def __init__(self, num_cpu: int = -1, verbose: bool = True) -> None:
         """Store the validation settings.
 
         Args:
@@ -20,7 +24,7 @@ class DataValidator:
         self.num_cpu = num_cpu
         self.verbose = verbose
 
-    def _validate_one(self, smiles: str) -> dict:
+    def _validate_one(self, smiles: str) -> dict[str, Any]:
         """Run one SMILES through parsing, sanitization and a conformer check.
 
         Args:
@@ -79,7 +83,7 @@ class DataValidator:
             result["error"] = f"Embedding exception: {str(e)}"
             return result
 
-    def validate_smiles(self, smiles_list):
+    def validate_smiles(self, smiles_list: Iterable[str]) -> list[dict[str, Any]]:
         """Run parallel validation over a list of SMILES."""
 
         smiles_list = list(smiles_list)

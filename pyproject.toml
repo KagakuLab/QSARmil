@@ -23,3 +23,8 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.mypy]
+python_version = "3.9"
+files = ["qsarmil"]
+ignore_missing_imports = true

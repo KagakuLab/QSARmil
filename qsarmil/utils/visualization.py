@@ -1,21 +1,26 @@
+from __future__ import annotations
+
+from typing import Iterable, Sequence
+
 import numpy as np
 import py3Dmol
 from IPython.display import HTML, display
 from rdkit import Chem
+from rdkit.Chem import Mol
 
 
 def visualize_conformers_grid(
-    mol,
-    weights,
-    key_conformers,
-    top_n=5,
-    style="stick",
-    n_cols=4,
-    width=250,
-    height=250,
-    show_all=False,
-    sort_by_weight=True,
-):
+    mol: Mol,
+    weights: Sequence[float],
+    key_conformers: Iterable[int],
+    top_n: int = 5,
+    style: str = "stick",
+    n_cols: int = 4,
+    width: int = 250,
+    height: int = 250,
+    show_all: bool = False,
+    sort_by_weight: bool = True,
+) -> None:
     """Render a molecule's conformers as a grid of 3D viewers in a notebook.
 
     Highlights the true key conformers and the top predicted ones by color,

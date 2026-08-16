@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import os
 import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -41,6 +44,7 @@ from xgboost import XGBClassifier, XGBRegressor
 from qsarmil.conformer.rdkit import RDKitConformerGenerator
 from qsarmil.descriptor.rdkit import RDKitAUTOCORR, RDKitGEOM, RDKitGETAWAY, RDKitMORSE, RDKitRDF, RDKitWHIM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
+from qsarmil.utils.ensemble import ConformerEnsemble
 
 from qsarmil.utils.logging import OutputSuppressor
 from sklearn.utils.multiclass import type_of_target
@@ -104,7 +108,9 @@ DEFAULT_PARAM_GRID = {
 # Utility Functions
 # ==========================================================
 
-def gen_conformers(smi_list, num_conf=10, num_cpu=1, verbose=False):
+def gen_conformers(
+    smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = 1, verbose: bool = False
+) -> list[ConformerEnsemble]:
     """Generate conformers for a list of SMILES strings using
     RDKitConformerGenerator."""
     mol_list = []
@@ -115,7 +121,7 @@ def gen_conformers(smi_list, num_conf=10, num_cpu=1, verbose=False):
     conf_list = conf_gen.run(mol_list)
     return conf_list
 
-def clean_descriptors(bags):
+def clean_descriptors(bags: list[np.ndarray]) -> list[np.ndarray]:
     """Replace NaN values in each bag's instances with the column means
     computed across all instances."""
 
@@ -135,7 +141,7 @@ def clean_descriptors(bags):
 
     return cleaned_bags
 
-def calc_descriptors(conf_list, calculator, verbose=False):
+def calc_descriptors(conf_list: list[ConformerEnsemble], calculator: DescriptorWrapper, verbose: bool = False) -> list[np.ndarray]:
     """Compute and NaN-clean descriptor bags for a list of conformer ensembles.
 
     Args:
@@ -144,14 +150,18 @@ def calc_descriptors(conf_list, calculator, verbose=False):
         verbose (bool): Whether the calculator should print progress.
 
     Returns:
-        list[np.ndarray]: One cleaned descriptor bag per molecule.
+        list[np.ndarray]: One cleaned descriptor bag per molecule. Assumes
+        descriptor calculation succeeded for every molecule; a
+        :class:`~qsarmil.utils.logging.FailedDescriptor` in ``calculator``'s
+        output is not handled here and will raise inside
+        :func:`clean_descriptors` instead.
     """
     calculator.verbose = verbose
-    x = calculator.run(conf_list)
+    x: list[Any] = calculator.run(conf_list)
     x = clean_descriptors(x)
     return x
 
-def scale_descriptors(x_train, x_test):
+def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Min-max scale descriptor bags, fitting the scaler on the train set only.
 
     Args:
@@ -168,7 +178,16 @@ def scale_descriptors(x_train, x_test):
 # ==========================================================
 # ModelBuilder Class
 # ==========================================================
-def build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator_instance, hopt=True):
+def build_model(
+    x_train: list[np.ndarray],
+    x_val: list[np.ndarray],
+    x_test: list[np.ndarray],
+    y_train: Iterable[Any],
+    y_val: Iterable[Any],
+    y_test: Iterable[Any],
+    estimator_instance: Any,
+    hopt: bool = True,
+) -> tuple[list[Any], list[Any], list[Any]]:
     """Fit one estimator and return its predictions on train/val/test.
 
     Tunes hyperparameters (if requested and supported) and fits on the
@@ -222,7 +241,14 @@ class LazyMIL:
     ``train.csv``/``val.csv``/``test.csv`` under ``output_folder``.
     """
 
-    def __init__(self, hopt=True, num_conf=10, num_cpu=20, output_folder=None, verbose=True):
+    def __init__(
+        self,
+        hopt: bool = True,
+        num_conf: int = 10,
+        num_cpu: int = 20,
+        output_folder: str | None = None,
+        verbose: bool = True,
+    ) -> None:
         """Set up the run and (re)create the output folder.
 
         Args:
@@ -244,9 +270,9 @@ class LazyMIL:
 
         if self.output_folder and os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
-        os.makedirs(self.output_folder)
+        os.makedirs(self.output_folder)  # type: ignore[arg-type]
 
-    def run(self, df_train, df_val, df_test):
+    def run(self, df_train: pd.DataFrame, df_val: pd.DataFrame, df_test: pd.DataFrame) -> None:
         """Train every descriptor/estimator combination and write predictions to CSV.
 
         Args:
@@ -313,13 +339,13 @@ class LazyMIL:
 
                 # 6. Write predictions
                 result_df_train[model_name] = pred_train
-                result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
+                result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)  # type: ignore[arg-type]
 
                 result_df_val[model_name] = pred_val
-                result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
+                result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)  # type: ignore[arg-type]
 
                 result_df_test[model_name] = pred_test
-                result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
+                result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)  # type: ignore[arg-type]
 
                 if self.verbose:
                     process = psutil.Process()

@@ -1,18 +1,25 @@
+from __future__ import annotations
+
+from typing import Any, Union
+
 import joblib
 from joblib import Parallel, delayed
 from rdkit import Chem, RDLogger
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, Mol
 
 from qsarmil.utils.ensemble import ConformerEnsemble
 from qsarmil.utils.logging import FailedConformer, FailedMolecule
 
 RDLogger.DisableLog("rdApp.*")
 
+MolOrFailed = Union[Mol, None, FailedMolecule, FailedConformer]
+"""A molecule, or a sentinel for one that already failed earlier in the pipeline."""
+
 
 class ConformerGenerator:
     """Generate and optimize molecular conformers with optional filtering."""
 
-    def __init__(self, num_conf=10, e_thresh=None, num_cpu=1, verbose=True):
+    def __init__(self, num_conf: int = 10, e_thresh: float | None = None, num_cpu: int = 1, verbose: bool = True) -> None:
         """Store the generation settings used by every run() call.
 
         Args:
@@ -30,12 +37,12 @@ class ConformerGenerator:
         self.num_cpu = num_cpu
         self.verbose = verbose
 
-    def _prepare_molecule(self, mol):
+    def _prepare_molecule(self, mol: Mol | None) -> Mol:
         """Prepare a molecule by adding explicit hydrogens."""
         mol = Chem.AddHs(mol)
         return mol
 
-    def _embed_conformers(self, mol):
+    def _embed_conformers(self, mol: Mol | None) -> Mol:
         """Generate multiple 3D conformers for a molecule."""
         mol = self._prepare_molecule(mol)
         params = AllChem.ETKDGv3()
@@ -43,33 +50,33 @@ class ConformerGenerator:
         AllChem.EmbedMultipleConfs(mol, numConfs=self.num_conf, params=params)
         return mol
 
-    def _generate_conformers(self, mol):
+    def _generate_conformers(self, mol: MolOrFailed) -> MolOrFailed:
         """Generate and optionally filter conformers for a molecule."""
 
         if isinstance(mol, (FailedMolecule, FailedConformer)):
             return mol
         try:
-            mol = self._embed_conformers(mol)
-            if not mol.GetNumConformers():
-                print(f"Conformer generation failed for {Chem.MolToSmiles(mol)}")
-                return FailedConformer(mol)
-            mol = self._optimize_conformers(mol)
+            embedded = self._embed_conformers(mol)
+            if not embedded.GetNumConformers():
+                print(f"Conformer generation failed for {Chem.MolToSmiles(embedded)}")
+                return FailedConformer(embedded)
+            embedded = self._optimize_conformers(embedded)
         except Exception:
             return FailedConformer(mol)
 
         if self.e_thresh is not None:
-            mol = filter_by_energy(mol, self.e_thresh)
+            embedded = filter_by_energy(embedded, self.e_thresh)
 
-        return mol
+        return embedded
 
-    def _optimize_conformers(self, mol):
+    def _optimize_conformers(self, mol: Mol) -> Mol:
         """Optimize all conformers of a molecule using UFF force field."""
 
         for conf in mol.GetConformers():
             AllChem.UFFOptimizeMolecule(mol, confId=conf.GetId())
         return mol
 
-    def run(self, list_of_mols):
+    def run(self, list_of_mols: list[MolOrFailed]) -> list[ConformerEnsemble]:
         """Generate conformers for a list of molecules in parallel."""
 
         total = len(list_of_mols)
@@ -79,7 +86,7 @@ class ConformerGenerator:
         class PrintCallback(joblib.parallel.BatchCompletionCallBack):
             """Joblib batch callback that prints a running progress count."""
 
-            def __call__(self, *args, **kwargs):
+            def __call__(self, *args: Any, **kwargs: Any) -> Any:
                 """Update the progress count and forward to the real callback."""
                 completed[0] += self.batch_size
                 if verbose:
@@ -104,7 +111,7 @@ class ConformerGenerator:
         return results
 
 
-def filter_by_energy(mol, e_thresh=1):
+def filter_by_energy(mol: Mol, e_thresh: float = 1) -> Mol:
     """Filter conformers of a molecule based on relative energy."""
 
     conf_energy_list = []

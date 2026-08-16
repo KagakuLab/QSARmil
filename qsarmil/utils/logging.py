@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import logging
 import os
 import sys
 import threading
+from types import TracebackType
+from typing import Any
 
 from rdkit import Chem, RDLogger
+from rdkit.Chem import Mol
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -15,7 +20,7 @@ class FailedMolecule:
         smiles (str): The SMILES string that failed to parse.
     """
 
-    def __init__(self, smiles):
+    def __init__(self, smiles: str) -> None:
         """Initialize a FailedMolecule with the problematic SMILES.
 
         Args:
@@ -24,7 +29,7 @@ class FailedMolecule:
         super().__init__()
         self.smiles = smiles
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return a human-readable error message.
 
         Returns:
@@ -37,19 +42,22 @@ class FailedConformer:
     """Represents a molecule for which conformer generation failed.
 
     Attributes:
-        mol (rdkit.Chem.Mol): Molecule that failed conformer generation.
+        mol (rdkit.Chem.Mol | None): Molecule that failed conformer
+            generation. Can be ``None`` when the input molecule itself was
+            already invalid (e.g. an unparseable SMILES upstream).
     """
 
-    def __init__(self, mol):
+    def __init__(self, mol: Mol | None) -> None:
         """Initialize a FailedConformer with the failed molecule.
 
         Args:
-            mol (rdkit.Chem.Mol): Molecule that failed conformer generation.
+            mol (rdkit.Chem.Mol | None): Molecule that failed conformer
+                generation, or ``None`` if the input was already invalid.
         """
         super().__init__()
         self.mol = mol
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return a human-readable error message.
 
         Returns:
@@ -60,22 +68,23 @@ class FailedConformer:
 
 
 class FailedDescriptor:
-    """Represents a molecule for which descriptor calculation failed.
+    """Represents a molecule (or conformer/fragment ensemble) for which
+    descriptor calculation failed.
 
     Attributes:
-        mol (rdkit.Chem.Mol): Molecule that failed descriptor calculation.
+        mol: The molecule or ensemble that failed descriptor calculation.
     """
 
-    def __init__(self, mol):
-        """Initialize a FailedDescriptor with the failed molecule.
+    def __init__(self, mol: Any) -> None:
+        """Initialize a FailedDescriptor with the failed input.
 
         Args:
-            mol (rdkit.Chem.Mol): Molecule that failed descriptor calculation.
+            mol: The molecule or ensemble that failed descriptor calculation.
         """
         super().__init__()
         self.mol = mol
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return a human-readable error message.
 
         Returns:
@@ -97,7 +106,7 @@ class OutputSuppressor:
     _lock = threading.Lock()
     _active = 0
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         """Redirect stdout, stderr and logging to /dev/null for this thread."""
         with OutputSuppressor._lock:
             if OutputSuppressor._active == 0:
@@ -123,7 +132,12 @@ class OutputSuppressor:
 
             OutputSuppressor._active += 1
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Restore the original stdout, stderr and logging state."""
         with OutputSuppressor._lock:
             OutputSuppressor._active -= 1

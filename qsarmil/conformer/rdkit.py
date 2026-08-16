@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 from qsarmil.conformer.base import ConformerGenerator
 
@@ -15,7 +16,7 @@ class RDKitConformerGenerator(ConformerGenerator):
         verbose (bool): Whether to display a progress bar during generation.
     """
 
-    def __init__(self, num_conf=10, e_thresh=None, num_cpu=1, verbose=True):
+    def __init__(self, num_conf: int = 10, e_thresh: float | None = None, num_cpu: int = 1, verbose: bool = True) -> None:
         """Initialize RDKitConformerGenerator with generation parameters.
 
         Args:

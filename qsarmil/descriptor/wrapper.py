@@ -1,7 +1,13 @@
+from __future__ import annotations
+
+from typing import Any, Callable, Sequence, Union
+
 import numpy as np
 
 from qsarmil.utils.ensemble import ConformerEnsemble, FragmentEnsemble, MixtureEnsemble
 from qsarmil.utils.logging import FailedDescriptor
+
+Ensemble = Union[ConformerEnsemble, FragmentEnsemble, MixtureEnsemble]
 
 
 class DescriptorWrapper:
@@ -17,7 +23,7 @@ class DescriptorWrapper:
         verbose (bool): Whether to display a progress bar.
     """
 
-    def __init__(self, transformer, verbose=True):
+    def __init__(self, transformer: Callable[..., np.ndarray], verbose: bool = True) -> None:
         """Initialize the descriptor wrapper.
 
         Args:
@@ -28,7 +34,7 @@ class DescriptorWrapper:
         self.transformer = transformer
         self.verbose = verbose
 
-    def __call__(self, mol, *args, **kwargs):
+    def __call__(self, mol: Ensemble, *args: Any, **kwargs: Any) -> np.ndarray | FailedDescriptor:
         """Compute the descriptor bag for a single molecule.
 
         Args:
@@ -39,7 +45,7 @@ class DescriptorWrapper:
         """
         return self._transform(mol)
 
-    def _ensemble_to_descriptors(self, ensemble_of_instances):
+    def _ensemble_to_descriptors(self, ensemble_of_instances: Ensemble) -> np.ndarray:
         """Convert a molecule into a bag of descriptor vectors."""
 
         bag = []
@@ -63,7 +69,7 @@ class DescriptorWrapper:
 
         return np.array(bag)
 
-    def _transform(self, mol):
+    def _transform(self, mol: Ensemble) -> np.ndarray | FailedDescriptor:
         """Compute descriptors for a single molecule."""
         try:
             x = self._ensemble_to_descriptors(mol)
@@ -72,7 +78,7 @@ class DescriptorWrapper:
             x = FailedDescriptor(mol)
         return x
 
-    def run(self, list_of_mols):
+    def run(self, list_of_mols: Sequence[Ensemble]) -> list[np.ndarray | FailedDescriptor]:
         """Compute descriptors for a list of molecules."""
 
         total = len(list_of_mols)

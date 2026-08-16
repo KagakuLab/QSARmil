@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pandas as pd
 from qsarcons.consensus import SystematicSearch, GeneticSearch
 from rdkit import RDLogger
@@ -17,7 +19,14 @@ class MultiConformerModel:
     (:class:`qsarcons.consensus.GeneticSearch`) and applies it to the test set.
     """
 
-    def __init__(self, num_conf=10, hopt=False, num_cpu=20, output_folder=None, verbose=True):
+    def __init__(
+        self,
+        num_conf: int = 10,
+        hopt: bool = False,
+        num_cpu: int = 20,
+        output_folder: str | None = None,
+        verbose: bool = True,
+    ) -> None:
         """Store the settings passed through to the underlying LazyMIL run.
 
         Args:
@@ -37,7 +46,7 @@ class MultiConformerModel:
         self.output_folder = output_folder
         self.verbose = verbose
 
-    def run_predict(self, df_train, df_test):
+    def run_predict(self, df_train: pd.DataFrame, df_test: pd.DataFrame) -> pd.DataFrame:
         """Train, select the best model consensus, and predict on the test set.
 
         Splits off a validation set from ``df_train``, trains every

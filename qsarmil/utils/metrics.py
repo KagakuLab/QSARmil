@@ -1,7 +1,14 @@
+from __future__ import annotations
+
 from math import comb
+from typing import Sequence
 
 
-def kid_accuracy(true_key_inst, predicted_weights, top_n=1):
+def kid_accuracy(
+    true_key_inst: Sequence[Sequence[int]],
+    predicted_weights: Sequence[Sequence[float]],
+    top_n: int = 1,
+) -> tuple[float, float]:
     """Check whether the model's top-weighted instances match the known key instances.
 
     For each bag, looks at the ``top_n`` instances with the highest predicted
@@ -25,7 +32,7 @@ def kid_accuracy(true_key_inst, predicted_weights, top_n=1):
     assert len(predicted_weights) == len(true_key_inst), "Mismatched input lengths."
 
     predicted_hits = 0
-    expected_hits = 0
+    expected_hits: float = 0
     total_bags = len(predicted_weights)
 
     for key_inst, bag_weights in zip(true_key_inst, predicted_weights):
