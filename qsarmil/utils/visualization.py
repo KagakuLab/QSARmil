@@ -65,7 +65,7 @@ def visualize_conformers_grid(
 
     viewers_html = []
     for i in conf_indices:
-        conf = mol.GetConformer(int(i) + 1)
+        conf = mol.GetConformer(int(i))
         block = Chem.MolToMolBlock(mol, confId=conf.GetId())
 
         color = "0xAAAAAA"  # default grey
