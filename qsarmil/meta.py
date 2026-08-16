@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tempfile
+
 import pandas as pd
 from qsarcons.consensus import SystematicSearch, GeneticSearch
 from rdkit import RDLogger
@@ -33,9 +35,9 @@ class MultiConformerModel:
             num_conf (int): Number of conformers to generate per molecule.
             hopt (bool): Whether to hyperparameter-tune each estimator.
             num_cpu (int): Number of CPU threads to use for conformer generation.
-            output_folder (str): Directory for LazyMIL's intermediate
-                prediction CSVs. Must be a real path (see
-                :class:`~qsarmil.lazy.LazyMIL`).
+            output_folder (str, optional): Directory for LazyMIL's
+                intermediate prediction CSVs. If omitted, a fresh temporary
+                directory is created.
             verbose (bool): Whether to print progress from the underlying steps.
         """
         super().__init__()
@@ -43,7 +45,7 @@ class MultiConformerModel:
         self.num_conf = num_conf
         self.num_cpu = num_cpu
         self.hopt = hopt
-        self.output_folder = output_folder
+        self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.verbose = verbose
 
     def run_predict(self, df_train: pd.DataFrame, df_test: pd.DataFrame) -> pd.DataFrame:
