@@ -13,6 +13,16 @@ class ConformerGenerator:
     """Generate and optimize molecular conformers with optional filtering."""
 
     def __init__(self, num_conf=10, e_thresh=None, num_cpu=1, verbose=True):
+        """Store the generation settings used by every run() call.
+
+        Args:
+            num_conf (int): Number of conformers to embed per molecule.
+            e_thresh (float, optional): Energy cutoff for dropping high-energy
+                conformers. If None, no energy filtering is applied.
+            num_cpu (int): Number of threads to use when generating conformers
+                in parallel.
+            verbose (bool): Whether to print a progress indicator.
+        """
         super().__init__()
 
         self.num_conf = num_conf
@@ -67,7 +77,10 @@ class ConformerGenerator:
         verbose = self.verbose
 
         class PrintCallback(joblib.parallel.BatchCompletionCallBack):
+            """Joblib batch callback that prints a running progress count."""
+
             def __call__(self, *args, **kwargs):
+                """Update the progress count and forward to the real callback."""
                 completed[0] += self.batch_size
                 if verbose:
                     print(f"Generating conformers: {min(completed[0], total)}/{total}", end="\r", flush=True)

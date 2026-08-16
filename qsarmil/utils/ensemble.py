@@ -10,6 +10,15 @@ class ConformerEnsemble(list[Mol]):
     """An ensemble of RDKit Mol objects, one per conformer."""
 
     def __init__(self, mol: Mol):
+        """Split a multi-conformer molecule into single-conformer copies.
+
+        Args:
+            mol (rdkit.Chem.Mol): Molecule with one or more embedded conformers.
+
+        Raises:
+            ValueError: If ``mol`` is a :class:`FailedConformer` or has no
+                conformers at all.
+        """
         super().__init__()
 
         if isinstance(mol, FailedConformer) or mol.GetNumConformers() == 0:
@@ -26,6 +35,11 @@ class FragmentEnsemble(list[Mol]):
     """A list of RDKit Mol objects representing fragments."""
 
     def __init__(self, mols: Iterable[Mol] = ()):
+        """Wrap an iterable of fragment molecules.
+
+        Args:
+            mols (Iterable[rdkit.Chem.Mol]): Fragments to store.
+        """
         super().__init__(mols)
 
 
@@ -33,4 +47,9 @@ class MixtureEnsemble(list[Mol]):
     """A list of RDKit Mol objects representing compound mixtures."""
 
     def __init__(self, mols: Iterable[Mol] = ()):
+        """Wrap an iterable of mixture-component molecules.
+
+        Args:
+            mols (Iterable[rdkit.Chem.Mol]): Mixture components to store.
+        """
         super().__init__(mols)

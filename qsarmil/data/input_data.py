@@ -10,10 +10,27 @@ class DataValidator:
     """Fast parallel SMILES validator + 3D conformer check using RDKit."""
 
     def __init__(self, num_cpu: int = -1, verbose: bool = True):
+        """Store the validation settings.
+
+        Args:
+            num_cpu (int): Number of parallel jobs to use (joblib convention,
+                -1 means use all available cores).
+            verbose (bool): Whether to print which rows got dropped and why.
+        """
         self.num_cpu = num_cpu
         self.verbose = verbose
 
     def _validate_one(self, smiles: str) -> dict:
+        """Run one SMILES through parsing, sanitization and a conformer check.
+
+        Args:
+            smiles (str): SMILES string to validate.
+
+        Returns:
+            dict: Pass/fail flags for each validation step, plus an
+            ``error`` message describing the first step that failed (or
+            ``None`` if the molecule passed everything).
+        """
         result = {
             "smiles": smiles,
             "is_valid_smiles": False,

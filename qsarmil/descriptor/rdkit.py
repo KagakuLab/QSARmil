@@ -33,6 +33,14 @@ class RDKitDescriptor3D:
     """
 
     def __init__(self, desc_name=None):
+        """Look up the RDKit descriptor function to use.
+
+        Args:
+            desc_name (str, optional): Name of a function on
+                ``rdkit.Chem.Descriptors3D.rdMolDescriptors``. Left unset by
+                subclasses that override ``__call__`` themselves (e.g.
+                :class:`RDKitGEOM`).
+        """
         super().__init__()
 
         if desc_name:
@@ -103,6 +111,7 @@ class RDKitAUTOCORR(RDKitDescriptor3D):
     """Compute 3D autocorrelation descriptors for a molecule."""
 
     def __init__(self):
+        """Wire up RDKit's ``CalcAUTOCORR3D``."""
         super().__init__("CalcAUTOCORR3D")
 
 
@@ -111,6 +120,7 @@ class RDKitRDF(RDKitDescriptor3D):
     molecule."""
 
     def __init__(self):
+        """Wire up RDKit's ``CalcRDF``."""
         super().__init__("CalcRDF")
 
 
@@ -118,6 +128,7 @@ class RDKitMORSE(RDKitDescriptor3D):
     """Compute 3D Morse descriptors for a molecule."""
 
     def __init__(self):
+        """Wire up RDKit's ``CalcMORSE``."""
         super().__init__("CalcMORSE")
 
 
@@ -125,6 +136,7 @@ class RDKitWHIM(RDKitDescriptor3D):
     """Compute 3D WHIM descriptors for a molecule."""
 
     def __init__(self):
+        """Wire up RDKit's ``CalcWHIM``."""
         super().__init__("CalcWHIM")
 
 
@@ -132,4 +144,5 @@ class RDKitGETAWAY(RDKitDescriptor3D):
     """Compute 3D GETAWAY descriptors for a molecule."""
 
     def __init__(self):
+        """Wire up RDKit's ``CalcGETAWAY``."""
         super().__init__("CalcGETAWAY")

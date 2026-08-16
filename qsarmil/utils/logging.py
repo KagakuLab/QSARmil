@@ -86,18 +86,19 @@ class FailedDescriptor:
 
 
 class OutputSuppressor:
-    """
-    Completely suppress ALL output:
-    - Python prints
-    - logging
-    - C/C++ libraries writing to stdout/stderr (CatBoost, XGBoost, etc.)
-    Thread-safe and nestable.
+    """Context manager that silences all output while it's open.
+
+    Suppresses Python `print`/logging as well as C/C++ libraries writing
+    straight to stdout/stderr (e.g. CatBoost, XGBoost). Thread-safe and
+    nestable: nested or concurrent uses share one counter, so output only
+    comes back once every ``with`` block has exited.
     """
 
     _lock = threading.Lock()
     _active = 0
 
     def __enter__(self):
+        """Redirect stdout, stderr and logging to /dev/null for this thread."""
         with OutputSuppressor._lock:
             if OutputSuppressor._active == 0:
                 # Save original file descriptors
@@ -123,6 +124,7 @@ class OutputSuppressor:
             OutputSuppressor._active += 1
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Restore the original stdout, stderr and logging state."""
         with OutputSuppressor._lock:
             OutputSuppressor._active -= 1
             if OutputSuppressor._active == 0:

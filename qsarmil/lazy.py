@@ -136,12 +136,31 @@ def clean_descriptors(bags):
     return cleaned_bags
 
 def calc_descriptors(conf_list, calculator, verbose=False):
+    """Compute and NaN-clean descriptor bags for a list of conformer ensembles.
+
+    Args:
+        conf_list (list[ConformerEnsemble]): Per-molecule conformer ensembles.
+        calculator (DescriptorWrapper): Descriptor calculator to apply.
+        verbose (bool): Whether the calculator should print progress.
+
+    Returns:
+        list[np.ndarray]: One cleaned descriptor bag per molecule.
+    """
     calculator.verbose = verbose
     x = calculator.run(conf_list)
     x = clean_descriptors(x)
     return x
 
 def scale_descriptors(x_train, x_test):
+    """Min-max scale descriptor bags, fitting the scaler on the train set only.
+
+    Args:
+        x_train (list[np.ndarray]): Training bags to fit the scaler on.
+        x_test (list[np.ndarray]): Bags to scale using that same fit.
+
+    Returns:
+        tuple[list[np.ndarray], list[np.ndarray]]: Scaled ``(x_train, x_test)``.
+    """
     scaler = BagMinMaxScaler()
     scaler.fit(x_train)
     return scaler.transform(x_train), scaler.transform(x_test)
@@ -150,6 +169,27 @@ def scale_descriptors(x_train, x_test):
 # ModelBuilder Class
 # ==========================================================
 def build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator_instance, hopt=True):
+    """Fit one estimator and return its predictions on train/val/test.
+
+    Tunes hyperparameters (if requested and supported) and fits on the
+    train split to produce train/val predictions, then refits the same
+    estimator on train+val combined to produce the final test predictions.
+
+    Args:
+        x_train (list[np.ndarray]): Training descriptor bags.
+        x_val (list[np.ndarray]): Validation descriptor bags.
+        x_test (list[np.ndarray]): Test descriptor bags.
+        y_train (array-like): Training targets.
+        y_val (array-like): Validation targets.
+        y_test (array-like): Test targets (unused, kept for signature symmetry).
+        estimator_instance: A MIL estimator implementing ``fit``/``predict``,
+            and optionally ``hopt`` for hyperparameter search.
+        hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting,
+            if the estimator supports it.
+
+    Returns:
+        tuple[list, list, list]: ``(pred_train, pred_val, pred_test)``.
+    """
 
     # 1. Scale train/val descriptors
     x_train_scaled, x_val_scaled = scale_descriptors(x_train, x_val)
@@ -173,8 +213,29 @@ def build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator_instan
 
 
 class LazyMIL:
+    """Train every combination of built-in descriptor and MIL estimator on one dataset.
+
+    For each of the 9 built-in 3D descriptor types crossed with every
+    regressor or classifier in :data:`REGRESSORS`/:data:`CLASSIFIERS` (task
+    type is inferred from the training targets), generates conformers,
+    computes descriptors, fits the estimator, and writes predictions to
+    ``train.csv``/``val.csv``/``test.csv`` under ``output_folder``.
+    """
 
     def __init__(self, hopt=True, num_conf=10, num_cpu=20, output_folder=None, verbose=True):
+        """Set up the run and (re)create the output folder.
+
+        Args:
+            hopt (bool): Whether to hyperparameter-tune each estimator before
+                fitting, for estimators that support it.
+            num_conf (int): Number of conformers to generate per molecule.
+            num_cpu (int): Number of CPU threads to use for conformer generation.
+            output_folder (str): Directory the per-model prediction CSVs are
+                written to. Must be a real path: if it already exists it's
+                wiped and recreated, and a missing/``None`` value will make
+                folder creation fail.
+            verbose (bool): Whether to print per-model progress and memory usage.
+        """
         self.hopt = hopt
         self.num_conf = num_conf
         self.output_folder = output_folder
@@ -186,6 +247,19 @@ class LazyMIL:
         os.makedirs(self.output_folder)
 
     def run(self, df_train, df_val, df_test):
+        """Train every descriptor/estimator combination and write predictions to CSV.
+
+        Args:
+            df_train (pd.DataFrame): Training data; column 0 is SMILES,
+                column 1 is the target.
+            df_val (pd.DataFrame): Validation data, same column layout.
+            df_test (pd.DataFrame): Test data, same column layout.
+
+        Returns:
+            None. Results are written to ``train.csv``, ``val.csv`` and
+            ``test.csv`` in ``self.output_folder``, with one prediction
+            column per descriptor/estimator combination.
+        """
 
         # 1. Get data (smiles and prop)
         result_df_train = pd.DataFrame()

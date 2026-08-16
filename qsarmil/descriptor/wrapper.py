@@ -14,7 +14,6 @@ class DescriptorWrapper:
     Args:
         transformer (callable): Descriptor function or object that accepts a molecule
             and optional conformer ID, returning a descriptor vector.
-        num_cpu (int): Number of CPU threads for parallel processing.
         verbose (bool): Whether to display a progress bar.
     """
 
@@ -23,7 +22,6 @@ class DescriptorWrapper:
 
         Args:
             transformer (callable): Descriptor function or object.
-            num_cpu (int): Number of CPU threads.
             verbose (bool): Whether to show progress bar.
         """
         super().__init__()
@@ -31,6 +29,14 @@ class DescriptorWrapper:
         self.verbose = verbose
 
     def __call__(self, mol, *args, **kwargs):
+        """Compute the descriptor bag for a single molecule.
+
+        Args:
+            mol: A conformer/fragment/mixture ensemble to compute descriptors for.
+
+        Returns:
+            np.ndarray: One descriptor vector per instance in the ensemble.
+        """
         return self._transform(mol)
 
     def _ensemble_to_descriptors(self, ensemble_of_instances):

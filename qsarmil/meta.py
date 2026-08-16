@@ -9,8 +9,26 @@ RDLogger.DisableLog("rdApp.*")
 
 
 class MultiConformerModel:
+    """End-to-end lazy MIL pipeline with automatic model selection.
+
+    Wraps :class:`~qsarmil.lazy.LazyMIL` to train every built-in
+    descriptor/estimator combination, then picks the best-performing
+    consensus of models on the validation split via a genetic search
+    (:class:`qsarcons.consensus.GeneticSearch`) and applies it to the test set.
+    """
 
     def __init__(self, num_conf=10, hopt=False, num_cpu=20, output_folder=None, verbose=True):
+        """Store the settings passed through to the underlying LazyMIL run.
+
+        Args:
+            num_conf (int): Number of conformers to generate per molecule.
+            hopt (bool): Whether to hyperparameter-tune each estimator.
+            num_cpu (int): Number of CPU threads to use for conformer generation.
+            output_folder (str): Directory for LazyMIL's intermediate
+                prediction CSVs. Must be a real path (see
+                :class:`~qsarmil.lazy.LazyMIL`).
+            verbose (bool): Whether to print progress from the underlying steps.
+        """
         super().__init__()
 
         self.num_conf = num_conf
@@ -20,6 +38,25 @@ class MultiConformerModel:
         self.verbose = verbose
 
     def run_predict(self, df_train, df_test):
+        """Train, select the best model consensus, and predict on the test set.
+
+        Splits off a validation set from ``df_train``, trains every
+        descriptor/estimator combination via :class:`~qsarmil.lazy.LazyMIL`,
+        runs a genetic search over the validation predictions to pick the
+        best-performing consensus of models, and applies that consensus to
+        the test predictions.
+
+        Args:
+            df_train (pd.DataFrame): Training data; column 0 is SMILES,
+                column 1 is the target.
+            df_test (pd.DataFrame): Data to predict on; column 0 is SMILES.
+                A target column is not required and is filled with ``None``
+                if missing.
+
+        Returns:
+            pd.DataFrame: Two columns, ``SMILES`` and ``pred``, one row per
+            test molecule.
+        """
 
         # 1. Fill fake test prop
         if len(df_test.columns) == 1:

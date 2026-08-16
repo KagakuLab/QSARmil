@@ -11,7 +11,7 @@ class RDKitFragmentGenerator:
     """Generate molecular fragments using RDKit BRICS decomposition."""
 
     def __init__(self, verbose=True):
-        """Initialize the FragmentGenerator."""
+        """Initialize the RDKit fragment generator."""
         super().__init__()
         self.verbose = verbose
 
