@@ -21,5 +21,26 @@ dependencies = [
         "py3Dmol",
 ]
 
+[dependency-groups]
+dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.mypy]
+python_version = "3.9"
+files = ["qsarmil"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--cov=qsarmil", "--cov-report=term-missing"]
+
+[tool.coverage.run]
+source = ["qsarmil"]
+
+[tool.coverage.report]
+fail_under = 100
+
+[tool.ruff]
+target-version = "py39"
