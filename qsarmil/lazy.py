@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 import time
+import sys
 from typing import Any, Iterable
 
 import numpy as np
@@ -67,31 +68,47 @@ DESCRIPTORS = {
     "MolFeatPmapper": DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
 }
 
-REGRESSORS = {
+_REGRESSORS = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkRegressor": InstanceWrapperMLPNetworkRegressor(pool="mean"),
-    "MeanBagWrapperMLPNetworkRegressor": BagWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanInstanceWrapperMLPNetworkRegressor": lambda: InstanceWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanBagWrapperMLPNetworkRegressor": lambda: BagWrapperMLPNetworkRegressor(pool="mean"),
     # mil networks
-    "MeanBagNetworkRegressor": BagNetworkRegressor(pool="mean"),
-    "MeanInstanceNetworkRegressor": InstanceNetworkRegressor(pool="mean"),
-    "AdditiveAttentionNetworkRegressor": AdditiveAttentionNetworkRegressor(),
-    "SelfAttentionNetworkRegressor": SelfAttentionNetworkRegressor(),
-    "HopfieldAttentionNetworkRegressor": HopfieldAttentionNetworkRegressor(),
-    "DynamicPoolingNetworkRegressor": DynamicPoolingNetworkRegressor(),
+    "MeanBagNetworkRegressor": lambda: BagNetworkRegressor(pool="mean"),
+    "MeanInstanceNetworkRegressor": lambda: InstanceNetworkRegressor(pool="mean"),
+    "AdditiveAttentionNetworkRegressor": lambda: AdditiveAttentionNetworkRegressor(),
+    "SelfAttentionNetworkRegressor": lambda: SelfAttentionNetworkRegressor(),
+    "HopfieldAttentionNetworkRegressor": lambda: HopfieldAttentionNetworkRegressor(),
+    "DynamicPoolingNetworkRegressor": lambda: DynamicPoolingNetworkRegressor(),
+    # classical
+    "Ridge": lambda: Ridge(),
+    "MLPRegressor": lambda: MLPRegressor(),
+    "LinearSVR": lambda: LinearSVR(),
+    "XGBRegressor": lambda: XGBRegressor(),
 }
 
-CLASSIFIERS =  {
+_CLASSIFIERS = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkClassifier": InstanceWrapperMLPNetworkClassifier(pool="mean"),
-    "MeanBagWrapperMLPNetworkClassifier": BagWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanInstanceWrapperMLPNetworkClassifier": lambda: InstanceWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanBagWrapperMLPNetworkClassifier": lambda: BagWrapperMLPNetworkClassifier(pool="mean"),
     # mil networks
-    "MeanBagNetworkClassifier": BagNetworkClassifier(pool="mean"),
-    "MeanInstanceNetworkClassifier": InstanceNetworkClassifier(pool="mean"),
-    "AdditiveAttentionNetworkClassifier": AdditiveAttentionNetworkClassifier(),
-    "SelfAttentionNetworkClassifier": SelfAttentionNetworkClassifier(),
-    "HopfieldAttentionNetworkClassifier": HopfieldAttentionNetworkClassifier(),
-    "DynamicPoolingNetworkClassifier": DynamicPoolingNetworkClassifier(),
+    "MeanBagNetworkClassifier": lambda: BagNetworkClassifier(pool="mean"),
+    "MeanInstanceNetworkClassifier": lambda: InstanceNetworkClassifier(pool="mean"),
+    "AdditiveAttentionNetworkClassifier": lambda: AdditiveAttentionNetworkClassifier(),
+    "SelfAttentionNetworkClassifier": lambda: SelfAttentionNetworkClassifier(),
+    "HopfieldAttentionNetworkClassifier": lambda: HopfieldAttentionNetworkClassifier(),
+    "DynamicPoolingNetworkClassifier": lambda: DynamicPoolingNetworkClassifier(),
+    # classical
+    "RidgeClassifier": lambda: RidgeClassifier(),
+    "MLPClassifier": lambda: MLPClassifier(),
+    "LinearSVC": lambda: LinearSVC(),
+    "XGBClassifier": lambda: XGBClassifier(),
 }
+
+# Lazy dicts of factories (lambdas). Models are not instantiated until
+# the training loop iterates over them, so heavy imports (torch, lightning,
+# xgboost) and model construction are deferred until truly needed.
+REGRESSORS = _REGRESSORS
+CLASSIFIERS = _CLASSIFIERS
 
 DEFAULT_PARAM_GRID = {
     # Fixed hparams
@@ -369,7 +386,8 @@ class LazyMIL:
             x_test = list(calc_descriptors(conf_test, desc_calc, verbose=False, col_means=train_col_means))
 
             # 6. Train models
-            for est_name, estimator in estimators_dict.items():
+            for est_name, factory in estimators_dict.items():
+                estimator = factory()
 
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
