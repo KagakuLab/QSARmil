@@ -131,12 +131,7 @@ def test_lazy_estimator_factories_are_callable(monkeypatch):
     monkeypatch.setattr(
         lazy_mod,
         "import_module",
-        lambda module_name: types.SimpleNamespace(
-            **{
-                "Ridge": DummyEstimator,
-                "RidgeClassifier": DummyEstimator,
-            }
-        ),
+        lambda module_name: types.SimpleNamespace(Ridge=DummyEstimator, RidgeClassifier=DummyEstimator),
     )
 
     regressor_factories = lazy_mod._REGRESSORS()
@@ -147,6 +142,18 @@ def test_lazy_estimator_factories_are_callable(monkeypatch):
 
     assert isinstance(regressor, DummyEstimator)
     assert isinstance(classifier, DummyEstimator)
+
+def test_default_model_imports():
+    from qsarmil.lazy import REGRESSORS
+    for factory in REGRESSORS.values():
+        est = factory()
+        assert hasattr(est, "fit")
+        assert hasattr(est, "predict")
+    from qsarmil.lazy import CLASSIFIERS
+    for factory in CLASSIFIERS.values():
+        est = factory()
+        assert hasattr(est, "fit")
+        assert hasattr(est, "predict")
 
 
 # ---------------------------------------------------------------------------

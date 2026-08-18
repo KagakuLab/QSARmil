@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from importlib import import_module
 import os
 import shutil
 import tempfile
 import time
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,7 @@ from qsarmil.utils.ensemble import ConformerEnsemble
 from qsarmil.utils.logging import OutputSuppressor
 from sklearn.utils.multiclass import type_of_target
 
-RDLogger.DisableLog("rdApp.*")
+RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
 # ==========================================================
 # Configuration
@@ -105,9 +106,11 @@ def _CLASSIFIERS() -> dict[str, Any]:
         "XGBClassifier": factory("xgboost", "XGBClassifier"),
     }
 
-# Lazy dict factories. Heavy model imports are done inside these functions.
-REGRESSORS = _REGRESSORS
-CLASSIFIERS = _CLASSIFIERS
+# Lazy estimator mappings. The dictionaries are built eagerly, but each value
+# remains a zero-argument factory so the actual estimator import/instantiation
+# only happens when ``factory()`` is reached during training.
+REGRESSORS = _REGRESSORS()
+CLASSIFIERS = _CLASSIFIERS()
 
 DEFAULT_PARAM_GRID = {
     # Fixed hparams
@@ -359,9 +362,9 @@ class LazyMIL:
         # 3. Get a task type
         task_type = type_of_target(y_train)
         if task_type == "continuous":
-            estimators_dict = resolve_estimators(REGRESSORS)
+            estimators_source = REGRESSORS
         elif task_type == "binary":
-            estimators_dict = resolve_estimators(CLASSIFIERS)
+            estimators_source = CLASSIFIERS
         else:
             raise ValueError(
                 f"Task type '{task_type}' not supported (only 'continuous' and 'binary' targets are supported)."
@@ -378,7 +381,7 @@ class LazyMIL:
             smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
         )
 
-        total_models = len(DESCRIPTORS) * len(estimators_dict)
+        total_models = len(DESCRIPTORS) * len(estimators_source)
         current_model = 0
 
         # 5. Calculate descriptors, imputing val/test NaNs with train's own
@@ -391,14 +394,14 @@ class LazyMIL:
             x_test = list(calc_descriptors(conf_test, desc_calc, verbose=False, col_means=train_col_means))
 
             # 6. Train models
-            for est_name, factory in estimators_dict.items():
+            for est_name, factory in estimators_source.items():
                 estimator = factory()
 
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
 
                 start = time.time()
-                with OutputSuppressor() as logger:
+                with OutputSuppressor():
                     pred_train, pred_val, pred_test = build_model(
                         x_train, x_val, x_test, y_train, y_val, y_test, estimator, self.hopt, seed=self.seed
                     )
@@ -420,4 +423,3 @@ class LazyMIL:
                     print(f"[{current_model}/{total_models}] Running model: {model_name}")
                     print(f"  > Finished in {elapsed_min:.2f} min | Memory usage: {mem_gb:.3f} GB")
 
-        return None
