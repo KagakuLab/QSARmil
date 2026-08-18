@@ -1,46 +1,22 @@
 from __future__ import annotations
 
+from importlib import import_module
 import os
 import shutil
 import tempfile
 import time
-import sys
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
 import psutil
 
-from milearn.network.classifier import (BagNetworkClassifier,
-                                        InstanceNetworkClassifier,
-                                        AdditiveAttentionNetworkClassifier,
-                                        SelfAttentionNetworkClassifier,
-                                        HopfieldAttentionNetworkClassifier,
-                                        DynamicPoolingNetworkClassifier,
-                                        )
-
-from milearn.network.regressor import (BagNetworkRegressor,
-                                       InstanceNetworkRegressor,
-                                       AdditiveAttentionNetworkRegressor,
-                                       SelfAttentionNetworkRegressor,
-                                       HopfieldAttentionNetworkRegressor,
-                                       DynamicPoolingNetworkRegressor,
-                                        )
-
-from milearn.network.regressor import InstanceWrapperMLPNetworkRegressor, BagWrapperMLPNetworkRegressor
-from milearn.network.classifier import InstanceWrapperMLPNetworkClassifier, BagWrapperMLPNetworkClassifier
-
 # preprocessing
 from milearn.preprocessing import BagMinMaxScaler
-from milearn.wrapper import BagWrapper, InstanceWrapper
 from molfeat.calc import ElectroShapeDescriptors, Pharmacophore3D, USRDescriptors
 
 # descriptors
 from rdkit import Chem, RDLogger
-from sklearn.linear_model import Ridge, RidgeClassifier
-from sklearn.neural_network import MLPClassifier, MLPRegressor
-from sklearn.svm import LinearSVC, LinearSVR
-from xgboost import XGBClassifier, XGBRegressor
 
 from qsarmil.conformer.rdkit import RDKitConformerGenerator
 from qsarmil.data.input_data import DataValidator
@@ -68,45 +44,68 @@ DESCRIPTORS = {
     "MolFeatPmapper": DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
 }
 
-_REGRESSORS = {
-    # mil wrappers
-    "MeanInstanceWrapperMLPNetworkRegressor": lambda: InstanceWrapperMLPNetworkRegressor(pool="mean"),
-    "MeanBagWrapperMLPNetworkRegressor": lambda: BagWrapperMLPNetworkRegressor(pool="mean"),
-    # mil networks
-    "MeanBagNetworkRegressor": lambda: BagNetworkRegressor(pool="mean"),
-    "MeanInstanceNetworkRegressor": lambda: InstanceNetworkRegressor(pool="mean"),
-    "AdditiveAttentionNetworkRegressor": lambda: AdditiveAttentionNetworkRegressor(),
-    "SelfAttentionNetworkRegressor": lambda: SelfAttentionNetworkRegressor(),
-    "HopfieldAttentionNetworkRegressor": lambda: HopfieldAttentionNetworkRegressor(),
-    "DynamicPoolingNetworkRegressor": lambda: DynamicPoolingNetworkRegressor(),
-    # classical
-    "Ridge": lambda: Ridge(),
-    "MLPRegressor": lambda: MLPRegressor(),
-    "LinearSVR": lambda: LinearSVR(),
-    "XGBRegressor": lambda: XGBRegressor(),
-}
+def _REGRESSORS() -> dict[str, Any]:
+    def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
+        def build() -> Any:
+            cls = getattr(import_module(module_name), class_name)
+            return cls(*args, **kwargs)
 
-_CLASSIFIERS = {
-    # mil wrappers
-    "MeanInstanceWrapperMLPNetworkClassifier": lambda: InstanceWrapperMLPNetworkClassifier(pool="mean"),
-    "MeanBagWrapperMLPNetworkClassifier": lambda: BagWrapperMLPNetworkClassifier(pool="mean"),
-    # mil networks
-    "MeanBagNetworkClassifier": lambda: BagNetworkClassifier(pool="mean"),
-    "MeanInstanceNetworkClassifier": lambda: InstanceNetworkClassifier(pool="mean"),
-    "AdditiveAttentionNetworkClassifier": lambda: AdditiveAttentionNetworkClassifier(),
-    "SelfAttentionNetworkClassifier": lambda: SelfAttentionNetworkClassifier(),
-    "HopfieldAttentionNetworkClassifier": lambda: HopfieldAttentionNetworkClassifier(),
-    "DynamicPoolingNetworkClassifier": lambda: DynamicPoolingNetworkClassifier(),
-    # classical
-    "RidgeClassifier": lambda: RidgeClassifier(),
-    "MLPClassifier": lambda: MLPClassifier(),
-    "LinearSVC": lambda: LinearSVC(),
-    "XGBClassifier": lambda: XGBClassifier(),
-}
+        return build
 
-# Lazy dicts of factories (lambdas). Models are not instantiated until
-# the training loop iterates over them, so heavy imports (torch, lightning,
-# xgboost) and model construction are deferred until truly needed.
+    return {
+        # mil wrappers
+        "MeanInstanceWrapperMLPNetworkRegressor": factory(
+            "milearn.network.regressor", "InstanceWrapperMLPNetworkRegressor", pool="mean"
+        ),
+        "MeanBagWrapperMLPNetworkRegressor": factory(
+            "milearn.network.regressor", "BagWrapperMLPNetworkRegressor", pool="mean"
+        ),
+        # mil networks
+        "MeanBagNetworkRegressor": factory("milearn.network.regressor", "BagNetworkRegressor", pool="mean"),
+        "MeanInstanceNetworkRegressor": factory("milearn.network.regressor", "InstanceNetworkRegressor", pool="mean"),
+        "AdditiveAttentionNetworkRegressor": factory("milearn.network.regressor", "AdditiveAttentionNetworkRegressor"),
+        "SelfAttentionNetworkRegressor": factory("milearn.network.regressor", "SelfAttentionNetworkRegressor"),
+        "HopfieldAttentionNetworkRegressor": factory("milearn.network.regressor", "HopfieldAttentionNetworkRegressor"),
+        "DynamicPoolingNetworkRegressor": factory("milearn.network.regressor", "DynamicPoolingNetworkRegressor"),
+        # classical
+        "Ridge": factory("sklearn.linear_model", "Ridge"),
+        "MLPRegressor": factory("sklearn.neural_network", "MLPRegressor"),
+        "LinearSVR": factory("sklearn.svm", "LinearSVR"),
+        "XGBRegressor": factory("xgboost", "XGBRegressor"),
+    }
+
+
+def _CLASSIFIERS() -> dict[str, Any]:
+    def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
+        def build() -> Any:
+            cls = getattr(import_module(module_name), class_name)
+            return cls(*args, **kwargs)
+
+        return build
+
+    return {
+        # mil wrappers
+        "MeanInstanceWrapperMLPNetworkClassifier": factory(
+            "milearn.network.classifier", "InstanceWrapperMLPNetworkClassifier", pool="mean"
+        ),
+        "MeanBagWrapperMLPNetworkClassifier": factory(
+            "milearn.network.classifier", "BagWrapperMLPNetworkClassifier", pool="mean"
+        ),
+        # mil networks
+        "MeanBagNetworkClassifier": factory("milearn.network.classifier", "BagNetworkClassifier", pool="mean"),
+        "MeanInstanceNetworkClassifier": factory("milearn.network.classifier", "InstanceNetworkClassifier", pool="mean"),
+        "AdditiveAttentionNetworkClassifier": factory("milearn.network.classifier", "AdditiveAttentionNetworkClassifier"),
+        "SelfAttentionNetworkClassifier": factory("milearn.network.classifier", "SelfAttentionNetworkClassifier"),
+        "HopfieldAttentionNetworkClassifier": factory("milearn.network.classifier", "HopfieldAttentionNetworkClassifier"),
+        "DynamicPoolingNetworkClassifier": factory("milearn.network.classifier", "DynamicPoolingNetworkClassifier"),
+        # classical
+        "RidgeClassifier": factory("sklearn.linear_model", "RidgeClassifier"),
+        "MLPClassifier": factory("sklearn.neural_network", "MLPClassifier"),
+        "LinearSVC": factory("sklearn.svm", "LinearSVC"),
+        "XGBClassifier": factory("xgboost", "XGBClassifier"),
+    }
+
+# Lazy dict factories. Heavy model imports are done inside these functions.
 REGRESSORS = _REGRESSORS
 CLASSIFIERS = _CLASSIFIERS
 
@@ -121,6 +120,12 @@ DEFAULT_PARAM_GRID = {
     "activation": ["relu", "leakyrelu", "gelu", "elu", "silu"],
     "learning_rate": [10e-5, 10e-4],
 }
+
+
+def resolve_estimators(estimators: Callable[[], Mapping[str, Any]] | Mapping[str, Any]) -> Mapping[str, Any]:
+    """Resolve estimator sources that may be either a lazy factory or a ready mapping."""
+
+    return estimators() if callable(estimators) else estimators
 
 # ==========================================================
 # Utility Functions
@@ -354,9 +359,9 @@ class LazyMIL:
         # 3. Get a task type
         task_type = type_of_target(y_train)
         if task_type == "continuous":
-            estimators_dict = REGRESSORS
+            estimators_dict = resolve_estimators(REGRESSORS)
         elif task_type == "binary":
-            estimators_dict = CLASSIFIERS
+            estimators_dict = resolve_estimators(CLASSIFIERS)
         else:
             raise ValueError(
                 f"Task type '{task_type}' not supported (only 'continuous' and 'binary' targets are supported)."

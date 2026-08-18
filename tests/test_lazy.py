@@ -1,4 +1,5 @@
 import os
+import types
 
 import numpy as np
 import pandas as pd
@@ -119,6 +120,33 @@ def test_build_model_hopt_false_skips_search():
     estimator = MockEstimator(supports_hopt=True)
     build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False)
     assert estimator.hopt_called is False
+
+
+def test_lazy_estimator_factories_are_callable(monkeypatch):
+    class DummyEstimator:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(
+        lazy_mod,
+        "import_module",
+        lambda module_name: types.SimpleNamespace(
+            **{
+                "Ridge": DummyEstimator,
+                "RidgeClassifier": DummyEstimator,
+            }
+        ),
+    )
+
+    regressor_factories = lazy_mod._REGRESSORS()
+    classifier_factories = lazy_mod._CLASSIFIERS()
+
+    regressor = regressor_factories["Ridge"]()
+    classifier = classifier_factories["RidgeClassifier"]()
+
+    assert isinstance(regressor, DummyEstimator)
+    assert isinstance(classifier, DummyEstimator)
 
 
 # ---------------------------------------------------------------------------
