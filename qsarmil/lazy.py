@@ -133,12 +133,6 @@ DEFAULT_PARAM_GRID = {
     "learning_rate": [10e-5, 10e-4],
 }
 
-
-def resolve_estimators(estimators: Callable[[], Mapping[str, Any]] | Mapping[str, Any]) -> Mapping[str, Any]:
-    """Resolve estimator sources that may be either a lazy factory or a ready mapping."""
-
-    return estimators() if callable(estimators) else estimators
-
 # ==========================================================
 # Utility Functions
 # ==========================================================

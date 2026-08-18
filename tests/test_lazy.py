@@ -262,15 +262,6 @@ def test_default_descriptor_imports():
         desc = factory()
         assert hasattr(desc, "run")
 
-
-def test_resolve_estimators_handles_callable_and_mapping():
-    mapping = {"Mock": object()}
-    assert lazy_mod.resolve_estimators(mapping) is mapping
-
-    resolved = lazy_mod.resolve_estimators(lambda: mapping)
-    assert resolved is mapping
-
-
 def test_all_lazy_descriptors_resolve(monkeypatch):
     class DummyDescriptor:
         def __init__(self, *args, **kwargs):
