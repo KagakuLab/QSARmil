@@ -1,3 +1,4 @@
+import csv
 import os
 import types
 
@@ -155,6 +156,49 @@ def test_default_model_imports():
         assert hasattr(est, "fit")
         assert hasattr(est, "predict")
 
+def test_default_descriptor_imports():
+    from qsarmil.lazy import DESCRIPTORS
+    for factory in DESCRIPTORS.values():
+        desc = factory()
+        assert hasattr(desc, "run")
+
+
+def test_resolve_estimators_handles_callable_and_mapping():
+    mapping = {"Mock": object()}
+    assert lazy_mod.resolve_estimators(mapping) is mapping
+
+    resolved = lazy_mod.resolve_estimators(lambda: mapping)
+    assert resolved is mapping
+
+
+def test_all_lazy_descriptors_resolve(monkeypatch):
+    class DummyDescriptor:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class DummyModule:
+        def __getattr__(self, name):
+            return DummyDescriptor
+
+    monkeypatch.setattr(lazy_mod, "import_module", lambda module_name: DummyModule())
+
+    descriptor_keys = {
+        "RDKitGEOM",
+        "RDKitAUTOCORR",
+        "RDKitRDF",
+        "RDKitMORSE",
+        "RDKitWHIM",
+        "MolFeatUSRD",
+        "MolFeatElectroShape",
+        "RDKitGETAWAY",
+        "MolFeatPmapper",
+    }
+
+    for name, factory in lazy_mod._DESCRIPTORS().items():
+        assert name in descriptor_keys
+        assert isinstance(factory(), DescriptorWrapper)
+
 
 # ---------------------------------------------------------------------------
 # LazyMIL.__init__
@@ -188,7 +232,7 @@ def test_lazymil_init_wipes_existing_path(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _fast_descriptors():
-    return {"RDKitGEOM": DescriptorWrapper(RDKitGEOM(), verbose=False)}
+    return {"RDKitGEOM": lambda: DescriptorWrapper(RDKitGEOM(), verbose=False)}
 
 
 def test_lazymil_run_continuous_verbose(monkeypatch, tmp_path, capsys):
@@ -202,8 +246,8 @@ def test_lazymil_run_continuous_verbose(monkeypatch, tmp_path, capsys):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True)
     lazy.run(df_train, df_val, df_test)
 
-    result = pd.read_csv(tmp_path / "out" / "train.csv")
-    assert len(result) == 2  # the invalid SMILES got dropped
+    with open(tmp_path / "out" / "train.csv", newline="") as f:
+        assert sum(1 for _ in csv.reader(f)) - 1 == 2  # the invalid SMILES got dropped
 
     captured = capsys.readouterr()
     assert "Running model:" in captured.out
@@ -221,8 +265,8 @@ def test_lazymil_run_binary_quiet(monkeypatch, tmp_path):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     lazy.run(df_train, df_val, df_test)
 
-    result = pd.read_csv(tmp_path / "out" / "test.csv")
-    assert len(result) == 2
+    with open(tmp_path / "out" / "test.csv", newline="") as f:
+        assert sum(1 for _ in csv.reader(f)) - 1 == 2
 
 
 def test_lazymil_run_unsupported_task_type(tmp_path):

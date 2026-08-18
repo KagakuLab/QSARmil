@@ -1,3 +1,4 @@
+import csv
 import os
 
 import pandas as pd
@@ -28,7 +29,7 @@ class FakeGeneticSearch:
 
 def _patch_fast_pipeline(monkeypatch, classifier=False):
     monkeypatch.setattr(meta_mod, "GeneticSearch", FakeGeneticSearch)
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", {"RDKitGEOM": DescriptorWrapper(RDKitGEOM(), verbose=False)})
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", {"RDKitGEOM": lambda: DescriptorWrapper(RDKitGEOM(), verbose=False)})
     if classifier:
         monkeypatch.setattr(lazy_mod, "CLASSIFIERS", {"Mock": MockEstimator(supports_hopt=False)})
     else:

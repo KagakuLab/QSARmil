@@ -1,49 +1,56 @@
 from __future__ import annotations
+# ruff: noqa: I001
 
 from collections.abc import Callable, Iterable, Mapping
-from importlib import import_module
 import os
 import shutil
 import tempfile
 import time
+from importlib import import_module
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import psutil
 
-# preprocessing
 from milearn.preprocessing import BagMinMaxScaler
-from molfeat.calc import ElectroShapeDescriptors, Pharmacophore3D, USRDescriptors
-
-# descriptors
 from rdkit import Chem, RDLogger
+from sklearn.utils.multiclass import type_of_target
 
 from qsarmil.conformer.rdkit import RDKitConformerGenerator
 from qsarmil.data.input_data import DataValidator
-from qsarmil.descriptor.rdkit import RDKitAUTOCORR, RDKitGEOM, RDKitGETAWAY, RDKitMORSE, RDKitRDF, RDKitWHIM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.utils.ensemble import ConformerEnsemble
 
 from qsarmil.utils.logging import OutputSuppressor
-from sklearn.utils.multiclass import type_of_target
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
 # ==========================================================
 # Configuration
 # ==========================================================
-DESCRIPTORS = {
-    "RDKitGEOM": DescriptorWrapper(RDKitGEOM()),
-    "RDKitAUTOCORR": DescriptorWrapper(RDKitAUTOCORR()),
-    "RDKitRDF": DescriptorWrapper(RDKitRDF()),
-    "RDKitMORSE": DescriptorWrapper(RDKitMORSE()),
-    "RDKitWHIM": DescriptorWrapper(RDKitWHIM()),
-    "MolFeatUSRD": DescriptorWrapper(USRDescriptors()),
-    "MolFeatElectroShape": DescriptorWrapper(ElectroShapeDescriptors()),
-    "RDKitGETAWAY": DescriptorWrapper(RDKitGETAWAY()),
-    "MolFeatPmapper": DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
-}
+def _DESCRIPTORS() -> dict[str, Callable[[], DescriptorWrapper]]:
+    def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Callable[[], DescriptorWrapper]:
+        def build() -> DescriptorWrapper:
+            cls = getattr(import_module(module_name), class_name)
+            return DescriptorWrapper(cls(*args, **kwargs))
+
+        return build
+
+    return {
+        "RDKitGEOM": factory("qsarmil.descriptor.rdkit", "RDKitGEOM"),
+        "RDKitAUTOCORR": factory("qsarmil.descriptor.rdkit", "RDKitAUTOCORR"),
+        "RDKitRDF": factory("qsarmil.descriptor.rdkit", "RDKitRDF"),
+        "RDKitMORSE": factory("qsarmil.descriptor.rdkit", "RDKitMORSE"),
+        "RDKitWHIM": factory("qsarmil.descriptor.rdkit", "RDKitWHIM"),
+        "MolFeatUSRD": factory("molfeat.calc", "USRDescriptors"),
+        "MolFeatElectroShape": factory("molfeat.calc", "ElectroShapeDescriptors"),
+        "RDKitGETAWAY": factory("qsarmil.descriptor.rdkit", "RDKitGETAWAY"),
+        "MolFeatPmapper": factory("molfeat.calc", "Pharmacophore3D", factory="pmapper"),
+    }
+
+
+DESCRIPTORS = _DESCRIPTORS()
 
 def _REGRESSORS() -> dict[str, Any]:
     def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
@@ -386,7 +393,8 @@ class LazyMIL:
 
         # 5. Calculate descriptors, imputing val/test NaNs with train's own
         #    column means
-        for desc_name, desc_calc in DESCRIPTORS.items():
+        for desc_name, desc_source in DESCRIPTORS.items():
+            desc_calc = desc_source()
 
             x_train = list(calc_descriptors(conf_train, desc_calc, verbose=False))
             train_col_means = compute_column_means(x_train)
