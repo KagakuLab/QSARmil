@@ -239,7 +239,7 @@ def _estimator_supports_bag_input(estimator_instance: Any) -> bool:
     """Heuristic: sklearn/xgboost estimators typically require 2D matrix input."""
 
     module_name = estimator_instance.__class__.__module__
-    return not (module_name.startswith("sklearn.") or module_name.startswith("xgboost."))
+    return not module_name.startswith(("sklearn.", "xgboost."))
 
 
 def _prepare_features_for_estimator(
