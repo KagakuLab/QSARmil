@@ -1,4 +1,3 @@
-import csv
 import os
 
 import pandas as pd
@@ -62,6 +61,25 @@ def test_run_predict_fills_missing_test_target(monkeypatch, tmp_path, capsys):
     assert "Best consensus" in captured.out
 
 
+def test_train_then_predict_split_api(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
+    df_test = pd.DataFrame({0: ["CCF"]})
+
+    model = MultiConformerModel(
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, seed=42
+    )
+    model.train(df_train)
+
+    assert model.is_trained is True
+    assert len(model.best_consensus) > 0
+
+    pred_df = model.predict(df_test)
+    assert list(pred_df.columns) == ["SMILES", "pred"]
+    assert len(pred_df) == 1
+
+
 def test_run_predict_with_existing_test_target_quiet(monkeypatch, tmp_path):
     _patch_fast_pipeline(monkeypatch, classifier=True)
 
@@ -95,3 +113,41 @@ def test_seeds_produce_different_train_val_splits(monkeypatch, tmp_path):
     train_a = pd.read_csv(tmp_path / "out_a" / "train.csv")
     train_b = pd.read_csv(tmp_path / "out_b" / "train.csv")
     assert list(train_a["SMILES"]) != list(train_b["SMILES"])
+
+
+def test_predict_before_train_raises(tmp_path):
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), verbose=False)
+    df_test = pd.DataFrame({0: ["CCO"]})
+    try:
+        model.predict(df_test)
+        assert False, "predict should fail before train/load"
+    except RuntimeError as e:
+        assert "not trained" in str(e)
+
+
+def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
+
+    model = MultiConformerModel(
+        num_conf=2,
+        hopt=False,
+        num_cpu=1,
+        output_folder=str(tmp_path / "train_out"),
+        verbose=False,
+        seed=42,
+    )
+    model.train(df_train)
+    model_path = tmp_path / "model.pkl"
+    model.save(model_path)
+
+    loaded = MultiConformerModel.load(model_path, output_folder=str(tmp_path / "pred_out"))
+    pred_df = loaded.predict(pd.DataFrame({0: ["CCF"]}))
+    assert list(pred_df.columns) == ["SMILES", "pred"]
+    assert len(pred_df) == 1
+
+    pred_df2 = MultiConformerModel.predictFromSMILES(model_path, ["CCF", "CCO"])
+    assert list(pred_df2.columns) == ["SMILES", "pred"]
+    assert len(pred_df2) == 2
+

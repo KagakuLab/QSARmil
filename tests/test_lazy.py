@@ -13,6 +13,7 @@ from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.lazy import (
     LazyMIL,
     build_model,
+    build_model_with_artifacts,
     calc_descriptors,
     clean_descriptors,
     compute_column_means,
@@ -121,6 +122,36 @@ def test_build_model_hopt_false_skips_search():
     estimator = MockEstimator(supports_hopt=True)
     build_model(x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False)
     assert estimator.hopt_called is False
+
+
+def test_build_model_with_sklearn_ridge_accepts_pooled_2d():
+    from sklearn.linear_model import Ridge
+
+    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
+    estimator = Ridge()
+    pred_train, pred_val, pred_test = build_model(
+        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
+    )
+
+    assert len(pred_train) == len(y_train)
+    assert len(pred_val) == len(y_val)
+    assert len(pred_test) == len(y_test)
+
+
+def test_build_model_with_artifacts_sklearn_ridge_accepts_pooled_2d():
+    from sklearn.linear_model import Ridge
+
+    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
+    estimator = Ridge()
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model_with_artifacts(
+        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
+    )
+
+    assert len(pred_train) == len(y_train)
+    assert len(pred_val) == len(y_val)
+    assert len(pred_test) == len(y_test)
+    assert hasattr(fitted_estimator, "predict")
+    assert hasattr(fitted_scaler, "transform")
 
 
 def test_lazy_estimator_factories_are_callable(monkeypatch):
@@ -274,3 +305,38 @@ def test_lazymil_run_unsupported_task_type(tmp_path):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     with pytest.raises(ValueError, match="not supported"):
         lazy.run(df, df, df)
+
+
+def test_lazymil_predict_before_train_raises(tmp_path):
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    with pytest.raises(RuntimeError, match="not trained"):
+        lazy.predict(pd.DataFrame({0: ["CCO"]}))
+
+
+def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1"], 1: [1.1, 2.2]})
+    df_val = pd.DataFrame({0: ["CCN", "CCC"], 1: [1.6, 2.6]})
+    df_test = pd.DataFrame({0: ["CCCl", "CCF"], 1: [0.6, 1.6]})
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.run(df_train, df_val, df_test)
+    assert lazy.is_trained is True
+
+    model_path = tmp_path / "lazymil.pkl"
+    lazy.save(model_path)
+
+    loaded = LazyMIL.load(model_path, output_folder=str(tmp_path / "loaded_out"))
+
+    def _should_not_retrain(*args, **kwargs):
+        raise AssertionError("predict path retrained a model")
+
+    monkeypatch.setattr(lazy_mod, "build_model_with_artifacts", _should_not_retrain)
+
+    pred_df = loaded.predict(pd.DataFrame({0: ["CCCl", "CCF"]}))
+    assert len(pred_df) == 2
+    assert "RDKitGEOM|Mock" in pred_df.columns
+    assert os.path.exists(tmp_path / "loaded_out" / "test.csv")
+
