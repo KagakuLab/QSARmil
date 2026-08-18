@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+dev = ["ruff", "mypy", "pytest", "pytest-cov", "ipython"]
 
 [tool.setuptools.packages.find]
 where = ["."]
