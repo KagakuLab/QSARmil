@@ -254,6 +254,39 @@ def _prepare_features_for_estimator(
         return x_train, x_val, x_test
     return _pool_bags_mean(x_train), _pool_bags_mean(x_val), _pool_bags_mean(x_test)
 
+
+def _ensure_estimator_predict_ready(estimator_instance: Any) -> None:
+    """Rebuild missing runtime trainer for milearn estimators after unpickling.
+
+    milearn's pickle protocol intentionally drops ``_trainer``. In inference-only
+    sessions (load -> predict), this helper recreates a prediction-capable
+    trainer so ``estimator.predict`` can run without retraining.
+    """
+
+    module_name = estimator_instance.__class__.__module__
+    if not module_name.startswith("milearn."):
+        return
+
+    if not hasattr(estimator_instance, "_trainer"):
+        return
+
+    if estimator_instance._trainer is not None:
+        return
+
+    import pytorch_lightning as pl
+
+    hparams = estimator_instance.hparams
+    estimator_instance._trainer = pl.Trainer(
+        max_epochs=getattr(hparams, "max_epochs", 1),
+        callbacks=[],
+        accelerator=getattr(hparams, "accelerator", "cpu"),
+        logger=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
+        deterministic=True,
+    )
+
 # ==========================================================
 # ModelBuilder Class
 # ==========================================================
@@ -586,7 +619,17 @@ class LazyMIL:
             _, _, fit_x_test_scaled = _prepare_features_for_estimator(
                 estimator, x_test_scaled, x_test_scaled, x_test_scaled
             )
-            result_df_test[model_name] = list(estimator.predict(fit_x_test_scaled))
+            _ensure_estimator_predict_ready(estimator)
+            try:
+                preds = estimator.predict(fit_x_test_scaled)
+            except AttributeError as exc:
+                # milearn estimators can be deserialized with _trainer=None.
+                if "NoneType" in str(exc) and "predict" in str(exc):
+                    _ensure_estimator_predict_ready(estimator)
+                    preds = estimator.predict(fit_x_test_scaled)
+                else:
+                    raise
+            result_df_test[model_name] = list(preds)
 
         result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
         return result_df_test

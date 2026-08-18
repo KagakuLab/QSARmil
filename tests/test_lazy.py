@@ -1,5 +1,6 @@
 import csv
 import os
+import sys
 import types
 
 import numpy as np
@@ -79,6 +80,27 @@ def test_scale_descriptors():
     scaled_train, scaled_test = scale_descriptors(x_train, x_test)
     assert len(scaled_train) == 1
     assert len(scaled_test) == 1
+
+
+def test_ensure_estimator_predict_ready_rebuilds_milearn_trainer(monkeypatch):
+    class DummyTrainer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_pl = types.SimpleNamespace(Trainer=DummyTrainer)
+    monkeypatch.setitem(sys.modules, "pytorch_lightning", fake_pl)
+
+    class DummyEstimator:
+        __module__ = "milearn.network.fake"
+
+        def __init__(self):
+            self._trainer = None
+            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
+
+    estimator = DummyEstimator()
+    lazy_mod._ensure_estimator_predict_ready(estimator)
+
+    assert isinstance(estimator._trainer, DummyTrainer)
 
 
 # ---------------------------------------------------------------------------
