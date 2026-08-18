@@ -1,4 +1,5 @@
 import os
+import pickle
 
 import pandas as pd
 from conftest import MockEstimator
@@ -21,6 +22,14 @@ class FakeGeneticSearch:
 
     def run(self, x_val, true_val):
         return list(x_val.columns)
+
+    def predict(self, x_subset):
+        return list(x_subset.mean(axis=1))
+
+
+class UnpicklableConsensus:
+    def __getstate__(self):
+        raise pickle.PickleError("cannot pickle")
 
     def predict(self, x_subset):
         return list(x_subset.mean(axis=1))
@@ -150,4 +159,65 @@ def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
     pred_df2 = MultiConformerModel.predictFromSMILES(model_path, ["CCF", "CCO"])
     assert list(pred_df2.columns) == ["SMILES", "pred"]
     assert len(pred_df2) == 2
+
+
+def test_predict_fallback_to_run_lazy_when_no_lazy_model(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
+    model.train(df_train)
+
+    model._lazy_model = None
+    pred_df = model.predict(pd.DataFrame({0: ["CCF"]}))
+    assert list(pred_df.columns) == ["SMILES", "pred"]
+
+
+def test_predict_fallback_to_mean_when_consensus_predictor_missing(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
+    model.train(df_train)
+
+    model._consensus_search = None
+    pred_df = model.predict(pd.DataFrame({0: ["CCF"]}))
+    assert list(pred_df.columns) == ["SMILES", "pred"]
+    assert len(pred_df) == 1
+
+
+def test_predict_raises_when_consensus_columns_missing(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
+    model.train(df_train)
+
+    model.best_consensus = ["Missing|Model"]
+    try:
+        model.predict(pd.DataFrame({0: ["CCF"]}))
+        assert False, "predict should fail when consensus columns are missing"
+    except ValueError as e:
+        assert "missing model columns" in str(e)
+
+
+def test_save_before_train_raises(tmp_path):
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), verbose=False)
+    try:
+        model.save(tmp_path / "model.pkl")
+        assert False, "save should fail before train/load"
+    except RuntimeError as e:
+        assert "not trained" in str(e)
+
+
+def test_save_handles_unpicklable_consensus(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
+    model.train(df_train)
+
+    model._consensus_search = UnpicklableConsensus()
+    model_path = tmp_path / "model.pkl"
+    model.save(model_path)
+
+    loaded = MultiConformerModel.load(model_path)
+    assert loaded._consensus_search is None
+
 

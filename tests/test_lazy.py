@@ -103,6 +103,44 @@ def test_ensure_estimator_predict_ready_rebuilds_milearn_trainer(monkeypatch):
     assert isinstance(estimator._trainer, DummyTrainer)
 
 
+def test_ensure_estimator_predict_ready_non_milearn_noop():
+    class DummyEstimator:
+        __module__ = "sklearn.linear_model"
+
+        def __init__(self):
+            self._trainer = None
+
+    estimator = DummyEstimator()
+    lazy_mod._ensure_estimator_predict_ready(estimator)
+    assert estimator._trainer is None
+
+
+def test_ensure_estimator_predict_ready_missing_trainer_attr_noop():
+    class DummyEstimator:
+        __module__ = "milearn.network.fake"
+
+        def __init__(self):
+            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
+
+    estimator = DummyEstimator()
+    lazy_mod._ensure_estimator_predict_ready(estimator)
+    assert not hasattr(estimator, "_trainer")
+
+
+def test_ensure_estimator_predict_ready_existing_trainer_kept():
+    class DummyEstimator:
+        __module__ = "milearn.network.fake"
+
+        def __init__(self):
+            self._trainer = object()
+            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
+
+    estimator = DummyEstimator()
+    original_trainer = estimator._trainer
+    lazy_mod._ensure_estimator_predict_ready(estimator)
+    assert estimator._trainer is original_trainer
+
+
 # ---------------------------------------------------------------------------
 # build_model
 # ---------------------------------------------------------------------------
@@ -174,6 +212,15 @@ def test_build_model_with_artifacts_sklearn_ridge_accepts_pooled_2d():
     assert len(pred_test) == len(y_test)
     assert hasattr(fitted_estimator, "predict")
     assert hasattr(fitted_scaler, "transform")
+
+
+def test_build_model_with_artifacts_hopt_path():
+    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
+    estimator = MockEstimator(supports_hopt=True)
+    build_model_with_artifacts(
+        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True, seed=11
+    )
+    assert estimator.hopt_called is True
 
 
 def test_lazy_estimator_factories_are_callable(monkeypatch):
@@ -361,4 +408,100 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
     assert len(pred_df) == 2
     assert "RDKitGEOM|Mock" in pred_df.columns
     assert os.path.exists(tmp_path / "loaded_out" / "test.csv")
+
+
+def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1"], 1: [1.1, 2.2]})
+    df_val = pd.DataFrame({0: ["CCN", "CCC"], 1: [1.6, 2.6]})
+    df_test = pd.DataFrame({0: ["CCCl", "CCF"], 1: [0.6, 1.6]})
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.run(df_train, df_val, df_test)
+
+    # Simulate loading an artifact whose descriptor is unavailable now.
+    only_key = next(iter(lazy._trained_models))
+    lazy._trained_models[only_key]["descriptor"] = "MissingDescriptor"
+    with pytest.raises(ValueError, match="isn't available"):
+        lazy.predict(pd.DataFrame({0: ["CCO"]}))
+
+
+def test_lazymil_predict_retries_known_attributeerror(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
+    monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
+
+    class IdentityScaler:
+        def transform(self, x):
+            return x
+
+    class FlakyEstimator:
+        __module__ = "milearn.network.fake"
+
+        def __init__(self):
+            self.calls = 0
+            self.hparams = types.SimpleNamespace(max_epochs=1, accelerator="cpu")
+            self._trainer = None
+
+        def predict(self, x):
+            self.calls += 1
+            if self.calls == 1:
+                raise AttributeError("'NoneType' object has no attribute 'predict'")
+            return np.array([0.5])
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy._trained_models = {
+        "RDKitGEOM|Mock": {
+            "descriptor": "RDKitGEOM",
+            "estimator": FlakyEstimator(),
+            "scaler": IdentityScaler(),
+            "train_col_means": np.array([0.0, 0.0]),
+        }
+    }
+
+    class DummyTrainer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_pl = types.SimpleNamespace(Trainer=DummyTrainer)
+    monkeypatch.setitem(sys.modules, "pytorch_lightning", fake_pl)
+
+    pred = lazy.predict(pd.DataFrame({0: ["CCO"]}))
+    assert list(pred["RDKitGEOM|Mock"]) == [0.5]
+
+
+def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
+    monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
+
+    class IdentityScaler:
+        def transform(self, x):
+            return x
+
+    class BadEstimator:
+        __module__ = "sklearn.fake"
+
+        def predict(self, x):
+            raise AttributeError("different attribute error")
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy._trained_models = {
+        "RDKitGEOM|Mock": {
+            "descriptor": "RDKitGEOM",
+            "estimator": BadEstimator(),
+            "scaler": IdentityScaler(),
+            "train_col_means": np.array([0.0, 0.0]),
+        }
+    }
+
+    with pytest.raises(AttributeError, match="different attribute error"):
+        lazy.predict(pd.DataFrame({0: ["CCO"]}))
+
+
+def test_lazymil_save_before_train_raises(tmp_path):
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    with pytest.raises(RuntimeError, match="not trained"):
+        lazy.save(tmp_path / "lazy.pkl")
+
 
