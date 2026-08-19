@@ -16,6 +16,7 @@ import pandas as pd
 import psutil
 
 from milearn.preprocessing import BagMinMaxScaler
+from milearn.wrapper import BagWrapper
 from rdkit import Chem, RDLogger
 from sklearn.utils.multiclass import type_of_target
 
@@ -31,88 +32,86 @@ RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 # ==========================================================
 # Configuration
 # ==========================================================
-def _DESCRIPTORS() -> dict[str, Callable[[], DescriptorWrapper]]:
-    def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Callable[[], DescriptorWrapper]:
-        def build() -> DescriptorWrapper:
-            cls = getattr(import_module(module_name), class_name)
-            return DescriptorWrapper(cls(*args, **kwargs))
+def model_factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
+    def build() -> Any:
+        cls = getattr(import_module(module_name), class_name)
+        # wrap non-MIL models
+        if not module_name.startswith("milearn."):
+            return BagWrapper(cls(*args, **kwargs))
+        return cls(*args, **kwargs)
 
-        return build
+    return build
+
+def descriptor_factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Callable[[], DescriptorWrapper]:
+    def build() -> DescriptorWrapper:
+        cls = getattr(import_module(module_name), class_name)
+        return DescriptorWrapper(cls(*args, **kwargs))
+
+    return build
+
+def _DESCRIPTORS() -> dict[str, Callable[[], DescriptorWrapper]]:
+
 
     return {
-        "RDKitGEOM": factory("qsarmil.descriptor.rdkit", "RDKitGEOM"),
-        "RDKitAUTOCORR": factory("qsarmil.descriptor.rdkit", "RDKitAUTOCORR"),
-        "RDKitRDF": factory("qsarmil.descriptor.rdkit", "RDKitRDF"),
-        "RDKitMORSE": factory("qsarmil.descriptor.rdkit", "RDKitMORSE"),
-        "RDKitWHIM": factory("qsarmil.descriptor.rdkit", "RDKitWHIM"),
-        "MolFeatUSRD": factory("molfeat.calc", "USRDescriptors"),
-        "MolFeatElectroShape": factory("molfeat.calc", "ElectroShapeDescriptors"),
-        "RDKitGETAWAY": factory("qsarmil.descriptor.rdkit", "RDKitGETAWAY"),
-        "MolFeatPmapper": factory("molfeat.calc", "Pharmacophore3D", factory="pmapper"),
+        "RDKitGEOM": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitGEOM"),
+        "RDKitAUTOCORR": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitAUTOCORR"),
+        "RDKitRDF": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitRDF"),
+        "RDKitMORSE": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitMORSE"),
+        "RDKitWHIM": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitWHIM"),
+        "MolFeatUSRD": descriptor_factory("molfeat.calc", "USRDescriptors"),
+        "MolFeatElectroShape": descriptor_factory("molfeat.calc", "ElectroShapeDescriptors"),
+        "RDKitGETAWAY": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitGETAWAY"),
+        "MolFeatPmapper": descriptor_factory("molfeat.calc", "Pharmacophore3D", factory="pmapper"),
     }
 
 
 DESCRIPTORS = _DESCRIPTORS()
 
 def _REGRESSORS() -> dict[str, Any]:
-    def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
-        def build() -> Any:
-            cls = getattr(import_module(module_name), class_name)
-            return cls(*args, **kwargs)
-
-        return build
-
     return {
         # mil wrappers
-        "MeanInstanceWrapperMLPNetworkRegressor": factory(
+        "MeanInstanceWrapperMLPNetworkRegressor": model_factory(
             "milearn.network.regressor", "InstanceWrapperMLPNetworkRegressor", pool="mean"
         ),
-        "MeanBagWrapperMLPNetworkRegressor": factory(
+        "MeanBagWrapperMLPNetworkRegressor": model_factory(
             "milearn.network.regressor", "BagWrapperMLPNetworkRegressor", pool="mean"
         ),
         # mil networks
-        "MeanBagNetworkRegressor": factory("milearn.network.regressor", "BagNetworkRegressor", pool="mean"),
-        "MeanInstanceNetworkRegressor": factory("milearn.network.regressor", "InstanceNetworkRegressor", pool="mean"),
-        "AdditiveAttentionNetworkRegressor": factory("milearn.network.regressor", "AdditiveAttentionNetworkRegressor"),
-        "SelfAttentionNetworkRegressor": factory("milearn.network.regressor", "SelfAttentionNetworkRegressor"),
-        "HopfieldAttentionNetworkRegressor": factory("milearn.network.regressor", "HopfieldAttentionNetworkRegressor"),
-        "DynamicPoolingNetworkRegressor": factory("milearn.network.regressor", "DynamicPoolingNetworkRegressor"),
+        "MeanBagNetworkRegressor": model_factory("milearn.network.regressor", "BagNetworkRegressor", pool="mean"),
+        "MeanInstanceNetworkRegressor": model_factory("milearn.network.regressor", "InstanceNetworkRegressor", pool="mean"),
+        "AdditiveAttentionNetworkRegressor": model_factory("milearn.network.regressor", "AdditiveAttentionNetworkRegressor"),
+        "SelfAttentionNetworkRegressor": model_factory("milearn.network.regressor", "SelfAttentionNetworkRegressor"),
+        "HopfieldAttentionNetworkRegressor": model_factory("milearn.network.regressor", "HopfieldAttentionNetworkRegressor"),
+        "DynamicPoolingNetworkRegressor": model_factory("milearn.network.regressor", "DynamicPoolingNetworkRegressor"),
         # classical
-        "Ridge": factory("sklearn.linear_model", "Ridge"),
-        "MLPRegressor": factory("sklearn.neural_network", "MLPRegressor"),
-        "LinearSVR": factory("sklearn.svm", "LinearSVR"),
-        "XGBRegressor": factory("xgboost", "XGBRegressor"),
+        "Ridge": model_factory("sklearn.linear_model", "Ridge"),
+        "MLPRegressor": model_factory("sklearn.neural_network", "MLPRegressor"),
+        "LinearSVR": model_factory("sklearn.svm", "LinearSVR"),
+        "XGBRegressor": model_factory("xgboost", "XGBRegressor"),
     }
 
 
 def _CLASSIFIERS() -> dict[str, Any]:
-    def factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
-        def build() -> Any:
-            cls = getattr(import_module(module_name), class_name)
-            return cls(*args, **kwargs)
-
-        return build
-
     return {
         # mil wrappers
-        "MeanInstanceWrapperMLPNetworkClassifier": factory(
+        "MeanInstanceWrapperMLPNetworkClassifier": model_factory(
             "milearn.network.classifier", "InstanceWrapperMLPNetworkClassifier", pool="mean"
         ),
-        "MeanBagWrapperMLPNetworkClassifier": factory(
+        "MeanBagWrapperMLPNetworkClassifier": model_factory(
             "milearn.network.classifier", "BagWrapperMLPNetworkClassifier", pool="mean"
         ),
         # mil networks
-        "MeanBagNetworkClassifier": factory("milearn.network.classifier", "BagNetworkClassifier", pool="mean"),
-        "MeanInstanceNetworkClassifier": factory("milearn.network.classifier", "InstanceNetworkClassifier", pool="mean"),
-        "AdditiveAttentionNetworkClassifier": factory("milearn.network.classifier", "AdditiveAttentionNetworkClassifier"),
-        "SelfAttentionNetworkClassifier": factory("milearn.network.classifier", "SelfAttentionNetworkClassifier"),
-        "HopfieldAttentionNetworkClassifier": factory("milearn.network.classifier", "HopfieldAttentionNetworkClassifier"),
-        "DynamicPoolingNetworkClassifier": factory("milearn.network.classifier", "DynamicPoolingNetworkClassifier"),
+        "MeanBagNetworkClassifier": model_factory("milearn.network.classifier", "BagNetworkClassifier", pool="mean"),
+        "MeanInstanceNetworkClassifier": model_factory("milearn.network.classifier", "InstanceNetworkClassifier", pool="mean"),
+        "AdditiveAttentionNetworkClassifier": model_factory("milearn.network.classifier", "AdditiveAttentionNetworkClassifier"),
+        "SelfAttentionNetworkClassifier": model_factory("milearn.network.classifier", "SelfAttentionNetworkClassifier"),
+        "HopfieldAttentionNetworkClassifier": model_factory("milearn.network.classifier", "HopfieldAttentionNetworkClassifier"),
+        "DynamicPoolingNetworkClassifier": model_factory("milearn.network.classifier", "DynamicPoolingNetworkClassifier"),
         # classical
-        "RidgeClassifier": factory("sklearn.linear_model", "RidgeClassifier"),
-        "MLPClassifier": factory("sklearn.neural_network", "MLPClassifier"),
-        "LinearSVC": factory("sklearn.svm", "LinearSVC"),
-        "XGBClassifier": factory("xgboost", "XGBClassifier"),
+        "RidgeClassifier": model_factory("sklearn.linear_model", "RidgeClassifier"),
+        "MLPClassifier": model_factory("sklearn.neural_network", "MLPClassifier"),
+        "LinearSVC": model_factory("sklearn.svm", "LinearSVC"),
+        "XGBClassifier": model_factory("xgboost", "XGBClassifier"),
     }
 
 # Lazy estimator mappings. The dictionaries are built eagerly, but each value
@@ -223,32 +222,6 @@ def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tu
     return scaler.transform(x_train), scaler.transform(x_test)
 
 
-def _pool_bags_mean(x_bags: list[np.ndarray]) -> np.ndarray:
-    """Pool each bag to one feature vector via instance-wise mean."""
-
-    return np.vstack([np.nanmean(np.asarray(bag, dtype=float), axis=0) for bag in x_bags])
-
-
-def _estimator_supports_bag_input(estimator_instance: Any) -> bool:
-    """Heuristic: sklearn/xgboost estimators typically require 2D matrix input."""
-
-    module_name = estimator_instance.__class__.__module__
-    return not module_name.startswith(("sklearn.", "xgboost."))
-
-
-def _prepare_features_for_estimator(
-    estimator_instance: Any,
-    x_train: list[np.ndarray],
-    x_val: list[np.ndarray],
-    x_test: list[np.ndarray],
-) -> tuple[Any, Any, Any]:
-    """Return either bag inputs or pooled 2D inputs depending on estimator type."""
-
-    if _estimator_supports_bag_input(estimator_instance):
-        return x_train, x_val, x_test
-    return _pool_bags_mean(x_train), _pool_bags_mean(x_val), _pool_bags_mean(x_test)
-
-
 def _ensure_estimator_predict_ready(estimator_instance: Any) -> None:
     """Rebuild missing runtime trainer for milearn estimators after unpickling.
 
@@ -294,7 +267,7 @@ def build_model(
     estimator_instance: Any,
     hopt: bool = True,
     seed: int = 42,
-) -> tuple[list[Any], list[Any], list[Any]]:
+) -> tuple[list[Any], list[Any], list[Any], Any, BagMinMaxScaler]:
     """Fit one estimator and return its predictions on train/val/test.
 
     Tunes hyperparameters (if requested and supported) and fits on the
@@ -316,83 +289,30 @@ def build_model(
             search, overriding ``DEFAULT_PARAM_GRID``'s own default.
 
     Returns:
-        tuple[list, list, list]: ``(pred_train, pred_val, pred_test)``.
+        tuple[list, list, list]: ``(pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler)``. Predictions are lists of the same length as the corresponding input bags.
     """
 
     # 1. Scale train/val descriptors
     x_train_scaled, x_val_scaled = scale_descriptors(x_train, x_val)
 
-    fit_x_train, fit_x_val, _ = _prepare_features_for_estimator(
-        estimator_instance, x_train_scaled, x_val_scaled, x_val_scaled
-    )
-
     # 2. Optimize hyperparameters
     if hopt and hasattr(estimator_instance, "hopt"):
         param_grid = {**DEFAULT_PARAM_GRID, "random_seed": seed}
-        estimator_instance.hopt(fit_x_train, y_train, param_grid=param_grid, verbose=False)
+        estimator_instance.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
 
     # 4. Train on train split only (not final training yet)
-    estimator_instance.fit(fit_x_train, y_train)
-    pred_train = list(estimator_instance.predict(fit_x_train))
-    pred_val = list(estimator_instance.predict(fit_x_val))
+    estimator_instance.fit(x_train_scaled, y_train)
+    pred_train = list(estimator_instance.predict(x_train_scaled))
+    pred_val = list(estimator_instance.predict(x_val_scaled))
 
     # 5. Retrain model on full (train + val)
-    x_full, y_full = x_train + x_val, np.hstack((y_train, y_val))
-    x_full_scaled, x_test_scaled = scale_descriptors(x_full, x_test)
-    fit_x_full, _, fit_x_test_scaled = _prepare_features_for_estimator(
-        estimator_instance, x_full_scaled, x_full_scaled, x_test_scaled
-    )
-    estimator_instance.fit(fit_x_full, y_full)
-    pred_test = list(estimator_instance.predict(fit_x_test_scaled))
-
-    return pred_train, pred_val, pred_test
-
-
-def build_model_with_artifacts(
-    x_train: list[np.ndarray],
-    x_val: list[np.ndarray],
-    x_test: list[np.ndarray],
-    y_train: Iterable[Any],
-    y_val: Iterable[Any],
-    y_test: Iterable[Any],
-    estimator_instance: Any,
-    hopt: bool = True,
-    seed: int = 42,
-) -> tuple[list[Any], list[Any], list[Any], Any, BagMinMaxScaler]:
-    """Fit one estimator, return predictions and the final fitted artifacts.
-
-    The returned estimator/scaler pair is fitted on train+val and can be
-    serialized for test-time inference without retraining.
-    """
-
-    # 1. Scale train/val descriptors
-    x_train_scaled, x_val_scaled = scale_descriptors(x_train, x_val)
-
-    fit_x_train, fit_x_val, _ = _prepare_features_for_estimator(
-        estimator_instance, x_train_scaled, x_val_scaled, x_val_scaled
-    )
-
-    # 2. Optimize hyperparameters
-    if hopt and hasattr(estimator_instance, "hopt"):
-        param_grid = {**DEFAULT_PARAM_GRID, "random_seed": seed}
-        estimator_instance.hopt(fit_x_train, y_train, param_grid=param_grid, verbose=False)
-
-    # 3. Train on train split for train/val predictions
-    estimator_instance.fit(fit_x_train, y_train)
-    pred_train = list(estimator_instance.predict(fit_x_train))
-    pred_val = list(estimator_instance.predict(fit_x_val))
-
-    # 4. Retrain on full (train + val) for deployable test-time inference
     x_full, y_full = x_train + x_val, np.hstack((y_train, y_val))
     scaler_full = BagMinMaxScaler()
     scaler_full.fit(x_full)
     x_full_scaled = scaler_full.transform(x_full)
     x_test_scaled = scaler_full.transform(x_test)
-    fit_x_full, _, fit_x_test_scaled = _prepare_features_for_estimator(
-        estimator_instance, x_full_scaled, x_full_scaled, x_test_scaled
-    )
-    estimator_instance.fit(fit_x_full, y_full)
-    pred_test = list(estimator_instance.predict(fit_x_test_scaled))
+    estimator_instance.fit(x_full_scaled, y_full)
+    pred_test = list(estimator_instance.predict(x_test_scaled))
 
     return pred_train, pred_val, pred_test, estimator_instance, scaler_full
 
@@ -536,7 +456,7 @@ class LazyMIL:
 
                 start = time.time()
                 with OutputSuppressor():
-                    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model_with_artifacts(
+                    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model(
                         x_train, x_val, x_test, y_train, y_val, y_test, estimator, self.hopt, seed=self.seed
                     )
                 elapsed_min = (time.time() - start) / 60
@@ -610,17 +530,14 @@ class LazyMIL:
             scaler = model_state["scaler"]
             estimator = model_state["estimator"]
             x_test_scaled = scaler.transform(descriptor_cache[desc_name])
-            _, _, fit_x_test_scaled = _prepare_features_for_estimator(
-                estimator, x_test_scaled, x_test_scaled, x_test_scaled
-            )
             _ensure_estimator_predict_ready(estimator)
             try:
-                preds = estimator.predict(fit_x_test_scaled)
+                preds = estimator.predict(x_test_scaled)
             except AttributeError as exc:
                 # milearn estimators can be deserialized with _trainer=None.
                 if "NoneType" in str(exc) and "predict" in str(exc):
                     _ensure_estimator_predict_ready(estimator)
-                    preds = estimator.predict(fit_x_test_scaled)
+                    preds = estimator.predict(x_test_scaled)
                 else:
                     raise
             result_df_test[model_name] = list(preds)

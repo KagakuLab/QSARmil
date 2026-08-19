@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from conftest import MockEstimator
+from milearn.wrapper import BagWrapper
 
 import qsarmil.lazy as lazy_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
@@ -14,7 +15,6 @@ from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.lazy import (
     LazyMIL,
     build_model,
-    build_model_with_artifacts,
     calc_descriptors,
     clean_descriptors,
     compute_column_means,
@@ -158,20 +158,22 @@ def _tiny_bags():
 def test_build_model_with_hopt():
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    pred_train, pred_val, pred_test = build_model(
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler  = build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True, seed=7
     )
     assert estimator.hopt_called is True
     assert len(pred_train) == 2
     assert len(pred_val) == 1
     assert len(pred_test) == 1
+    assert hasattr(fitted_estimator, "predict")
+    assert hasattr(fitted_scaler, "transform")
 
 
 def test_build_model_without_hopt_attr():
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
     estimator = MockEstimator(supports_hopt=False)
     assert not hasattr(estimator, "hopt")
-    pred_train, _, _ = build_model(
+    pred_train, _, _, _, _ = build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True
     )
     assert len(pred_train) == 2
@@ -188,22 +190,8 @@ def test_build_model_with_sklearn_ridge_accepts_pooled_2d():
     from sklearn.linear_model import Ridge
 
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
-    estimator = Ridge()
-    pred_train, pred_val, pred_test = build_model(
-        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
-    )
-
-    assert len(pred_train) == len(y_train)
-    assert len(pred_val) == len(y_val)
-    assert len(pred_test) == len(y_test)
-
-
-def test_build_model_with_artifacts_sklearn_ridge_accepts_pooled_2d():
-    from sklearn.linear_model import Ridge
-
-    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
-    estimator = Ridge()
-    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model_with_artifacts(
+    estimator = BagWrapper(Ridge())
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
     )
 
@@ -214,35 +202,40 @@ def test_build_model_with_artifacts_sklearn_ridge_accepts_pooled_2d():
     assert hasattr(fitted_scaler, "transform")
 
 
-def test_build_model_with_artifacts_hopt_path():
+def test_build_model_sklearn_ridge_accepts_pooled_2d():
+    from sklearn.linear_model import Ridge
+
+    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
+    estimator = BagWrapper(Ridge())
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model(
+        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
+    )
+
+    assert len(pred_train) == len(y_train)
+    assert len(pred_val) == len(y_val)
+    assert len(pred_test) == len(y_test)
+    assert hasattr(fitted_estimator, "predict")
+    assert hasattr(fitted_scaler, "transform")
+
+
+def test_build_model_hopt_path():
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    build_model_with_artifacts(
+    build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True, seed=11
     )
     assert estimator.hopt_called is True
 
 
 def test_lazy_estimator_factories_are_callable(monkeypatch):
-    class DummyEstimator:
-        def __init__(self, *args, **kwargs):
-            self.args = args
-            self.kwargs = kwargs
-
-    monkeypatch.setattr(
-        lazy_mod,
-        "import_module",
-        lambda module_name: types.SimpleNamespace(Ridge=DummyEstimator, RidgeClassifier=DummyEstimator),
-    )
-
-    regressor_factories = lazy_mod._REGRESSORS()
-    classifier_factories = lazy_mod._CLASSIFIERS()
+    regressor_factories = lazy_mod.REGRESSORS
+    classifier_factories = lazy_mod.CLASSIFIERS
 
     regressor = regressor_factories["Ridge"]()
     classifier = classifier_factories["RidgeClassifier"]()
 
-    assert isinstance(regressor, DummyEstimator)
-    assert isinstance(classifier, DummyEstimator)
+    assert hasattr(regressor, "pool")
+    assert hasattr(classifier, "pool")
 
 def test_default_model_imports():
     from qsarmil.lazy import REGRESSORS
@@ -393,7 +386,7 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
     def _should_not_retrain(*args, **kwargs):
         raise AssertionError("predict path retrained a model")
 
-    monkeypatch.setattr(lazy_mod, "build_model_with_artifacts", _should_not_retrain)
+    monkeypatch.setattr(lazy_mod, "build_model", _should_not_retrain)
 
     pred_df = loaded.predict(pd.DataFrame({0: ["CCCl", "CCF"]}))
     assert len(pred_df) == 2
