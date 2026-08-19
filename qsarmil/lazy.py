@@ -84,10 +84,10 @@ def _REGRESSORS() -> dict[str, Any]:
         "HopfieldAttentionNetworkRegressor": model_factory("milearn.network.regressor", "HopfieldAttentionNetworkRegressor"),
         "DynamicPoolingNetworkRegressor": model_factory("milearn.network.regressor", "DynamicPoolingNetworkRegressor"),
         # classical
-        "Ridge": model_factory("sklearn.linear_model", "Ridge"),
-        "MLPRegressor": model_factory("sklearn.neural_network", "MLPRegressor"),
-        "LinearSVR": model_factory("sklearn.svm", "LinearSVR"),
-        "XGBRegressor": model_factory("xgboost", "XGBRegressor"),
+        # "Ridge": model_factory("sklearn.linear_model", "Ridge"),
+        # "MLPRegressor": model_factory("sklearn.neural_network", "MLPRegressor"),
+        # "LinearSVR": model_factory("sklearn.svm", "LinearSVR"),
+        # "XGBRegressor": model_factory("xgboost", "XGBRegressor"),
     }
 
 
@@ -108,10 +108,10 @@ def _CLASSIFIERS() -> dict[str, Any]:
         "HopfieldAttentionNetworkClassifier": model_factory("milearn.network.classifier", "HopfieldAttentionNetworkClassifier"),
         "DynamicPoolingNetworkClassifier": model_factory("milearn.network.classifier", "DynamicPoolingNetworkClassifier"),
         # classical
-        "RidgeClassifier": model_factory("sklearn.linear_model", "RidgeClassifier"),
-        "MLPClassifier": model_factory("sklearn.neural_network", "MLPClassifier"),
-        "LinearSVC": model_factory("sklearn.svm", "LinearSVC"),
-        "XGBClassifier": model_factory("xgboost", "XGBClassifier"),
+        # "RidgeClassifier": model_factory("sklearn.linear_model", "RidgeClassifier"),
+        # "MLPClassifier": model_factory("sklearn.neural_network", "MLPClassifier"),
+        # "LinearSVC": model_factory("sklearn.svm", "LinearSVC"),
+        # "XGBClassifier": model_factory("xgboost", "XGBClassifier"),
     }
 
 # Lazy estimator mappings. The dictionaries are built eagerly, but each value
