@@ -227,16 +227,6 @@ def test_build_model_hopt_path():
     assert estimator.hopt_called is True
 
 
-def test_lazy_estimator_factories_are_callable(monkeypatch):
-    regressor_factories = lazy_mod.REGRESSORS
-    classifier_factories = lazy_mod.CLASSIFIERS
-
-    regressor = regressor_factories["Ridge"]()
-    classifier = classifier_factories["RidgeClassifier"]()
-
-    assert hasattr(regressor, "pool")
-    assert hasattr(classifier, "pool")
-
 def test_default_model_imports():
     from qsarmil.lazy import REGRESSORS
     for factory in REGRESSORS.values():
@@ -282,6 +272,31 @@ def test_all_lazy_descriptors_resolve(monkeypatch):
     for name, factory in lazy_mod._DESCRIPTORS().items():
         assert name in descriptor_keys
         assert isinstance(factory(), DescriptorWrapper)
+
+
+def test_model_factory_wraps_non_milearn_estimators(monkeypatch):
+    class DummyEstimator:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        def fit(self, x, y):
+            return self
+
+        def predict(self, x):
+            return x
+
+    class DummyModule:
+        pass
+
+    DummyModule.DummyEstimator = DummyEstimator
+
+    monkeypatch.setattr(lazy_mod, "import_module", lambda module_name: DummyModule())
+
+    factory = lazy_mod.model_factory("sklearn.dummy", "DummyEstimator", foo="bar")
+    wrapped = factory()
+
+    assert isinstance(wrapped, BagWrapper)
 
 
 # ---------------------------------------------------------------------------
