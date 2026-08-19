@@ -485,7 +485,7 @@ class LazyMIL:
                     print(f"[{current_model}/{total_models}] Running model: {model_name}")
                     print(f"  > Finished in {elapsed_min:.2f} min | Memory usage: {mem_gb:.3f} GB")
 
-    def predict(self, df_test: pd.DataFrame) -> pd.DataFrame:
+    def predict(self, df_test: pd.DataFrame, save: bool = False) -> pd.DataFrame:
         """Run inference from persisted fitted models without retraining.
 
         This path only validates SMILES, generates conformers/descriptors,
@@ -541,8 +541,8 @@ class LazyMIL:
                 else:
                     raise
             result_df_test[model_name] = list(preds)
-
-        result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
+        if save:
+            result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
         return result_df_test
 
     def save(self, model_path: str | Path) -> None:

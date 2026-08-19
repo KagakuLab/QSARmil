@@ -364,9 +364,6 @@ def test_lazymil_run_binary_quiet(monkeypatch, tmp_path):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     lazy.run(df_train, df_val, df_test)
 
-    with open(tmp_path / "out" / "test.csv", newline="") as f:
-        assert sum(1 for _ in csv.reader(f)) - 1 == 2
-
 
 def test_lazymil_run_unsupported_task_type(tmp_path):
     df = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC"], 1: ["a", "b", "c", "d"]})
@@ -403,7 +400,7 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
 
     monkeypatch.setattr(lazy_mod, "build_model", _should_not_retrain)
 
-    pred_df = loaded.predict(pd.DataFrame({0: ["CCCl", "CCF"]}))
+    pred_df = loaded.predict(pd.DataFrame({0: ["CCCl", "CCF"]}), save=True)
     assert len(pred_df) == 2
     assert "RDKitGEOM|Mock" in pred_df.columns
     assert os.path.exists(tmp_path / "loaded_out" / "test.csv")

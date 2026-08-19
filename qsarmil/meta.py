@@ -139,7 +139,7 @@ class MultiConformerModel:
 
         return self
 
-    def predict(self, df_test: pd.DataFrame) -> pd.DataFrame:
+    def predict(self, df_test: pd.DataFrame, save: bool = False) -> pd.DataFrame:
         """Predict for a new test dataframe using the stored trained state."""
 
         if not self.is_trained:
@@ -147,12 +147,10 @@ class MultiConformerModel:
 
         df_test = self._ensure_test_target_column(df_test)
         if self._lazy_model is not None and self._lazy_model.is_trained:
-            self._lazy_model.predict(df_test)
+            res_test = self._lazy_model.predict(df_test, save=save)
         else:
-            # Backward-compatible fallback for older serialized states.
-            self._run_lazy(self._train_df, self._val_df, df_test)
+            raise RuntimeError("LazyMIL model is not trained. Call `train` or `load` first.")
 
-        res_test = pd.read_csv(f"{self.output_folder}/test.csv")
         x_test = res_test.iloc[:, 2:]
 
         missing_cols = [c for c in self.best_consensus if c not in x_test.columns]

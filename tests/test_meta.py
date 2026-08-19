@@ -163,13 +163,12 @@ def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
 
 def test_predict_fallback_to_run_lazy_when_no_lazy_model(monkeypatch, tmp_path):
     _patch_fast_pipeline(monkeypatch)
-    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], 1: [1.1, 2.2, 3.3, 4.4, 5.5]})
     model = MultiConformerModel(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
-    model.train(df_train)
-
-    model._lazy_model = None
-    pred_df = model.predict(pd.DataFrame({0: ["CCF"]}))
-    assert list(pred_df.columns) == ["SMILES", "pred"]
+    try:
+        model.predict(pd.DataFrame({0: ["CCF"]}))
+        assert False, "predict should fail when lazy model is not trained"
+    except RuntimeError as e:
+        assert True
 
 
 def test_predict_fallback_to_mean_when_consensus_predictor_missing(monkeypatch, tmp_path):
