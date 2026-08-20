@@ -7,6 +7,8 @@ import pickle
 import shutil
 import tempfile
 import time
+import json
+import joblib
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -641,27 +643,84 @@ class LazyMIL:
             raise RuntimeError("LazyMIL is not trained. Nothing to serialize.")
 
         model_path = Path(model_path)
-        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.mkdir(parents=True, exist_ok=True)
 
-        state = {
+        # 1. Save main metadata.json
+        main_metadata = {
             "hopt": self.hopt,
             "num_conf": self.num_conf,
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
             "task_type": self._task_type,
-            "trained_models": self._trained_models,
+            "trained_models": list(self._trained_models.keys()),
         }
-        with model_path.open("wb") as f:
-            pickle.dump(state, f)
+        with (model_path / "metadata.json").open("w") as f:
+            json.dump(main_metadata, f, indent=4)
+
+        # 2. Save each model in its own folder
+        models_dir = model_path / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        for model_name in self._trained_models.keys():
+            model_state = self._trained_models[model_name]
+            model_subdir = models_dir / model_name
+            model_subdir.mkdir(parents=True, exist_ok=True)
+
+            # Save model metadata
+            model_metadata = {
+                "descriptor": model_state["descriptor"],
+                "train_col_means": model_state["train_col_means"].tolist() if isinstance(
+                    model_state["train_col_means"], np.ndarray
+                ) else model_state["train_col_means"],
+            }
+            with (model_subdir / "metadata.json").open("w") as f:
+                json.dump(model_metadata, f, indent=4)
+
+            # Save estimator and scaler
+            joblib.dump(model_state["estimator"], model_subdir / "estimator.joblib")
+            joblib.dump(model_state["scaler"], model_subdir / "scaler.joblib")
 
     @classmethod
     def load(cls, model_path: str | Path, output_folder: str | None = None) -> LazyMIL:
         """Load a serialized LazyMIL artifact for inference-only use."""
 
         model_path = Path(model_path)
-        with model_path.open("rb") as f:
-            state = pickle.load(f)
+
+        if model_path.is_dir():
+            # New directory format: look for .pkl at the root (legacy save)
+            pkl = next(model_path.glob("*.pkl"), None)
+            if pkl is not None:
+                with pkl.open("rb") as f:
+                    state = pickle.load(f)
+            else:
+                # New directory format: metadata.json + joblib files
+                with (model_path / "metadata.json").open("r") as f:
+                    main_metadata = json.load(f)
+                state = {
+                    "hopt": main_metadata["hopt"],
+                    "num_conf": main_metadata["num_conf"],
+                    "num_cpu": main_metadata["num_cpu"],
+                    "verbose": main_metadata["verbose"],
+                    "seed": main_metadata["seed"],
+                    "task_type": main_metadata.get("task_type"),
+                    "trained_models": {},
+                }
+                for model_name in main_metadata["trained_models"]:
+                    model_subdir = model_path / "models" / model_name
+                    with (model_subdir / "metadata.json").open("r") as f:
+                        model_metadata = json.load(f)
+                    model_state = {
+                        "descriptor": model_metadata["descriptor"],
+                        "train_col_means": np.array(model_metadata["train_col_means"]),
+                        "estimator": joblib.load(model_subdir / "estimator.joblib"),
+                        "scaler": joblib.load(model_subdir / "scaler.joblib"),
+                    }
+                    state["trained_models"][model_name] = model_state
+
+        else:
+            with model_path.open("rb") as f:
+                state = pickle.load(f)
 
         model = cls(
             hopt=state["hopt"],

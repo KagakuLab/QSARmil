@@ -4,6 +4,7 @@ import os
 import pickle
 import shutil
 import tempfile
+import json
 from pathlib import Path
 from typing import Any
 
@@ -175,61 +176,82 @@ class MultiConformerModel:
         return pred_df
 
     def save(self, model_path: str | Path) -> None:
-        """Serialize the trained model state to disk."""
+        """Serialize the trained model state to disk using the LazyMIL structure.
+
+        Args:
+            model_path (str | Path): Directory where the model should be saved.
+        """
 
         if not self.is_trained:
             raise RuntimeError("Model is not trained. Nothing to serialize.")
 
         model_path = Path(model_path)
-        state = {
+        model_path.mkdir(parents=True, exist_ok=True)
+
+        # Save the dataframes as CSVs
+        if self._train_df is not None:
+            train_csv = model_path / "train.csv"
+            self._train_df.to_csv(train_csv, index=False)
+        if self._val_df is not None:
+            val_csv = model_path / "val.csv"
+            self._val_df.to_csv(val_csv, index=False)
+
+        # Save metadata
+        metadata = {
             "num_conf": self.num_conf,
             "hopt": self.hopt,
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
-            "train_df": self._train_df,
-            "val_df": self._val_df,
             "best_consensus": self.best_consensus,
-            "consensus_search": self._consensus_search,
-            "lazy_model": self._lazy_model,
+            "train_df_csv": str(model_path / "train.csv") if self._train_df is not None else None,
+            "val_df_csv": str(model_path / "val.csv") if self._val_df is not None else None,
         }
 
-        # Some environments may not allow pickling the qsarcons search object.
-        try:
-            pickle.dumps(state["consensus_search"])
-        except (pickle.PickleError, AttributeError, TypeError):
-            state["consensus_search"] = None
+        # Save metadata
+        with model_path.joinpath("metadata.json").open("w") as f:
+            json.dump(metadata, f, indent=4)
 
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        with model_path.open("wb") as f:
-            pickle.dump(state, f)
+        # Save the underlying LazyMIL model
+        if self._lazy_model is not None:
+            models_dir = model_path / "models"
+            self._lazy_model.save(models_dir / "consensus_model")
+
 
     @classmethod
     def load(cls, model_path: str | Path, output_folder: str | None = None) -> MultiConformerModel:
-        """Load a serialized model state."""
+        """Load a serialized model state from the structured directory."""
 
         model_path = Path(model_path)
-        with model_path.open("rb") as f:
-            state = pickle.load(f)
+        metadata_file = model_path / "metadata.json"
+
+        if not metadata_file.exists():
+            raise FileNotFoundError(f"Metadata file not found at {metadata_file}")
+
+        with metadata_file.open("r") as f:
+            metadata = json.load(f)
 
         model = cls(
-            num_conf=state["num_conf"],
-            hopt=state["hopt"],
-            num_cpu=state["num_cpu"],
+            num_conf=metadata["num_conf"],
+            hopt=metadata["hopt"],
+            num_cpu=metadata["num_cpu"],
             output_folder=output_folder,
-            verbose=state["verbose"],
-            seed=state["seed"],
+            verbose=metadata["verbose"],
+            seed=metadata["seed"],
         )
-        model._train_df = state["train_df"]
-        model._val_df = state["val_df"]
-        model.best_consensus = list(state["best_consensus"])
-        model._consensus_search = state.get("consensus_search")
-        model._lazy_model = state.get("lazy_model")
-        if model._lazy_model is not None:
-            model._lazy_model.output_folder = model.output_folder
-            if os.path.exists(model.output_folder):
-                shutil.rmtree(model.output_folder)
-            os.makedirs(model.output_folder)
+
+        model.best_consensus = list(metadata["best_consensus"])
+
+        if metadata["train_df_csv"] is not None:
+            model._train_df = pd.read_csv(metadata["train_df_csv"])
+        if metadata["val_df_csv"] is not None:
+            model._val_df = pd.read_csv(metadata["val_df_csv"])
+
+        # Load the underlying LazyMIL model if it was saved
+        lazy_model_path = model_path / "models" / "consensus_model"
+        if lazy_model_path.exists():
+            model._lazy_model = LazyMIL.load(str(lazy_model_path), output_folder=model.output_folder)
+
         return model
 
     @staticmethod
