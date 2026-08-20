@@ -599,16 +599,7 @@ class LazyMIL:
             x_test, missing = self._get_cached_descriptors(desc_name, smi_test)
             assert not missing
             x_test_scaled = scaler.transform(x_test)
-            _ensure_estimator_predict_ready(estimator)
-            try:
-                preds = estimator.predict(x_test_scaled)
-            except AttributeError as exc:
-                # milearn estimators can be deserialized with _trainer=None.
-                if "NoneType" in str(exc) and "predict" in str(exc):
-                    _ensure_estimator_predict_ready(estimator)
-                    preds = estimator.predict(x_test_scaled)
-                else:
-                    raise
+            preds = estimator.predict(x_test_scaled)
             result_df_test[model_name] = list(preds)
         if save:
             result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)

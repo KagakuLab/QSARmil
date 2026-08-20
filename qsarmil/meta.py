@@ -79,18 +79,6 @@ class MultiConformerModel:
             df_test[1] = [None for _ in df_test.index]
         return df_test
 
-    def _run_lazy(self, df_train: pd.DataFrame, df_val: pd.DataFrame, df_test: pd.DataFrame) -> None:
-        """Run LazyMIL with the current configuration."""
-
-        lazy_ml = LazyMIL(
-            num_conf=self.num_conf,
-            hopt=self.hopt,
-            num_cpu=self.num_cpu,
-            output_folder=self.output_folder,
-            verbose=self.verbose,
-            seed=self.seed,
-        )
-        lazy_ml.run(df_train, df_val, df_test)
 
     def train(self, df_train: pd.DataFrame) -> MultiConformerModel:
         """Train/model-select once and cache everything required for later prediction.
@@ -230,13 +218,11 @@ class MultiConformerModel:
             os.makedirs(model.output_folder)
         return model
 
-    @staticmethod
-    def predictFromSMILES(model_path: str | Path, smiles: list[str] | pd.Series) -> pd.DataFrame:
+    def predictFromSMILES(self, smiles: list[str] | pd.Series) -> pd.DataFrame:
         """Load a serialized model and predict directly from SMILES strings."""
 
-        model = MultiConformerModel.load(model_path)
         df_test = pd.DataFrame({0: list(smiles)})
-        return model.predict(df_test)
+        return self.predict(df_test)
 
     def run_predict(self, df_train: pd.DataFrame, df_test: pd.DataFrame) -> pd.DataFrame:
         """Backwards-compatible one-shot API: train then predict.

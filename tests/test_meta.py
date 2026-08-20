@@ -51,38 +51,6 @@ def test_init_default_creates_temp_dir():
     assert model.seed == 42
 
 
-def test_run_lazy_instantiates_lazymil(monkeypatch, tmp_path):
-    calls = {}
-
-    class FakeLazyMIL:
-        def __init__(self, **kwargs):
-            calls["kwargs"] = kwargs
-
-        def run(self, df_train, df_val, df_test):
-            calls["dfs"] = (df_train, df_val, df_test)
-
-    monkeypatch.setattr(meta_mod, "LazyMIL", FakeLazyMIL)
-
-    model = MultiConformerModel(
-        num_conf=3, hopt=True, num_cpu=2, output_folder=str(tmp_path / "out"), verbose=False, seed=7
-    )
-    df_train = pd.DataFrame({0: ["CCO"], 1: [1.0]})
-    df_val = pd.DataFrame({0: ["CCN"], 1: [2.0]})
-    df_test = pd.DataFrame({0: ["CCC"], 1: [3.0]})
-
-    model._run_lazy(df_train, df_val, df_test)
-
-    assert calls["kwargs"] == {
-        "num_conf": 3,
-        "hopt": True,
-        "num_cpu": 2,
-        "output_folder": str(tmp_path / "out"),
-        "verbose": False,
-        "seed": 7,
-    }
-    assert calls["dfs"] == (df_train, df_val, df_test)
-
-
 def test_run_predict_fills_missing_test_target(monkeypatch, tmp_path, capsys):
     _patch_fast_pipeline(monkeypatch)
 
@@ -189,7 +157,7 @@ def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
     assert list(pred_df.columns) == ["SMILES", "pred"]
     assert len(pred_df) == 1
 
-    pred_df2 = MultiConformerModel.predictFromSMILES(model_path, ["CCF", "CCO"])
+    pred_df2 = loaded.predictFromSMILES(["CCF", "CCO"])
     assert list(pred_df2.columns) == ["SMILES", "pred"]
     assert len(pred_df2) == 2
 

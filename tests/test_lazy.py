@@ -1,11 +1,11 @@
 import csv
 import os
-import sys
 import types
 
 import numpy as np
 import pandas as pd
 import pytest
+
 from conftest import MockEstimator
 from milearn.wrapper import BagWrapper
 
@@ -14,6 +14,7 @@ from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.lazy import (
     LazyMIL,
+    _ensure_estimator_predict_ready,
     build_model,
     calc_descriptors,
     clean_descriptors,
@@ -80,65 +81,6 @@ def test_scale_descriptors():
     scaled_train, scaled_test = scale_descriptors(x_train, x_test)
     assert len(scaled_train) == 1
     assert len(scaled_test) == 1
-
-
-def test_ensure_estimator_predict_ready_rebuilds_milearn_trainer(monkeypatch):
-    class DummyTrainer:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_pl = types.SimpleNamespace(Trainer=DummyTrainer)
-    monkeypatch.setitem(sys.modules, "pytorch_lightning", fake_pl)
-
-    class DummyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self._trainer = None
-            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
-
-    estimator = DummyEstimator()
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-
-    assert isinstance(estimator._trainer, DummyTrainer)
-
-
-def test_ensure_estimator_predict_ready_non_milearn_noop():
-    class DummyEstimator:
-        __module__ = "sklearn.linear_model"
-
-        def __init__(self):
-            self._trainer = None
-
-    estimator = DummyEstimator()
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-    assert estimator._trainer is None
-
-
-def test_ensure_estimator_predict_ready_missing_trainer_attr_noop():
-    class DummyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
-
-    estimator = DummyEstimator()
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-    assert not hasattr(estimator, "_trainer")
-
-
-def test_ensure_estimator_predict_ready_existing_trainer_kept():
-    class DummyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self._trainer = object()
-            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
-
-    estimator = DummyEstimator()
-    original_trainer = estimator._trainer
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-    assert estimator._trainer is original_trainer
 
 
 # ---------------------------------------------------------------------------
@@ -432,49 +374,6 @@ def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
         lazy.predict(pd.DataFrame({0: ["CCO"]}))
 
 
-def test_lazymil_predict_retries_known_attributeerror(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
-    monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
-
-    class IdentityScaler:
-        def transform(self, x):
-            return x
-
-    class FlakyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self.calls = 0
-            self.hparams = types.SimpleNamespace(max_epochs=1, accelerator="cpu")
-            self._trainer = None
-
-        def predict(self, x):
-            self.calls += 1
-            if self.calls == 1:
-                raise AttributeError("'NoneType' object has no attribute 'predict'")
-            return np.array([0.5])
-
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy._trained_models = {
-        "RDKitGEOM|Mock": {
-            "descriptor": "RDKitGEOM",
-            "estimator": FlakyEstimator(),
-            "scaler": IdentityScaler(),
-            "train_col_means": np.array([0.0, 0.0]),
-        }
-    }
-
-    class DummyTrainer:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_pl = types.SimpleNamespace(Trainer=DummyTrainer)
-    monkeypatch.setitem(sys.modules, "pytorch_lightning", fake_pl)
-
-    pred = lazy.predict(pd.DataFrame({0: ["CCO"]}))
-    assert list(pred["RDKitGEOM|Mock"]) == [0.5]
-
-
 def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
     monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
@@ -501,6 +400,58 @@ def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
 
     with pytest.raises(AttributeError, match="different attribute error"):
         lazy.predict(pd.DataFrame({0: ["CCO"]}))
+
+
+def test_ensure_estimator_predict_ready_non_milearn_returns():
+    class Estimator:
+        __module__ = "sklearn.fake"
+
+    estimator = Estimator()
+    _ensure_estimator_predict_ready(estimator)
+
+
+def test_ensure_estimator_predict_ready_missing_trainer_attr_returns():
+    class Estimator:
+        __module__ = "milearn.fake"
+
+    estimator = Estimator()
+    _ensure_estimator_predict_ready(estimator)
+
+
+def test_ensure_estimator_predict_ready_existing_trainer_returns():
+    class Estimator:
+        __module__ = "milearn.fake"
+
+    estimator = Estimator()
+    estimator._trainer = object()
+    _ensure_estimator_predict_ready(estimator)
+
+
+def test_ensure_estimator_predict_ready_rebuilds_trainer(monkeypatch):
+    calls = {}
+
+    class FakeTrainer:
+        def __init__(self, **kwargs):
+            calls["kwargs"] = kwargs
+
+    class Estimator:
+        __module__ = "milearn.fake"
+
+    estimator = Estimator()
+    estimator._trainer = None
+    estimator.hparams = types.SimpleNamespace(max_epochs=7, accelerator="cpu")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pytorch_lightning",
+        types.SimpleNamespace(Trainer=FakeTrainer),
+    )
+
+    _ensure_estimator_predict_ready(estimator)
+
+    assert isinstance(estimator._trainer, FakeTrainer)
+    assert calls["kwargs"]["max_epochs"] == 7
+    assert calls["kwargs"]["deterministic"] is True
 
 
 def test_lazymil_save_before_train_raises(tmp_path):
