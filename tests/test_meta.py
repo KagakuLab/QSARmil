@@ -177,8 +177,6 @@ def test_predict_raises_when_lazy_model_state_is_not_trained(tmp_path):
         is_trained = False
 
     model = MultiConformerModel(output_folder=str(tmp_path / "out"), verbose=False)
-    model._train_df = pd.DataFrame({0: ["CCO"], 1: [1.0]})
-    model._val_df = pd.DataFrame({0: ["CCN"], 1: [2.0]})
     model.best_consensus = ["RDKitGEOM|Mock"]
     model._lazy_model = cast(Any, FakeLazyMIL())
 

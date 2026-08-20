@@ -59,8 +59,6 @@ class MultiConformerModel:
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.verbose = verbose
         self.seed = seed
-        self._train_df: pd.DataFrame | None = None
-        self._val_df: pd.DataFrame | None = None
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None
         self._lazy_model: LazyMIL | None = None
@@ -69,7 +67,7 @@ class MultiConformerModel:
     def is_trained(self) -> bool:
         """Whether :meth:`train` has produced a reusable consensus."""
 
-        return self._train_df is not None and self._val_df is not None and bool(self.best_consensus)
+        return bool(self.best_consensus)
 
     def _ensure_test_target_column(self, df_test: pd.DataFrame) -> pd.DataFrame:
         """Ensure test data has at least two columns for LazyMIL compatibility."""
@@ -115,8 +113,6 @@ class MultiConformerModel:
         cons_search = GeneticSearch(cons_size="auto", n_iter=50)
         best_cons = cons_search.run(x_val, true_val)
 
-        self._train_df = train_df.reset_index(drop=True)
-        self._val_df = val_df.reset_index(drop=True)
         self.best_consensus = list(best_cons)
         self._consensus_search = cons_search
         self._lazy_model = lazy_ml
@@ -173,8 +169,6 @@ class MultiConformerModel:
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
-            "train_df": self._train_df,
-            "val_df": self._val_df,
             "best_consensus": self.best_consensus,
             "consensus_search": self._consensus_search,
             "lazy_model": self._lazy_model,
@@ -206,8 +200,6 @@ class MultiConformerModel:
             verbose=state["verbose"],
             seed=state["seed"],
         )
-        model._train_df = state["train_df"]
-        model._val_df = state["val_df"]
         model.best_consensus = list(state["best_consensus"])
         model._consensus_search = state.get("consensus_search")
         model._lazy_model = state.get("lazy_model")
