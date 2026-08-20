@@ -326,6 +326,14 @@ def test_lazymil_init_wipes_existing_path(tmp_path):
     assert not os.path.exists(os.path.join(target, "stale.txt"))
 
 
+def test_lazymil_load_descriptor_cache_invalid_format_raises(tmp_path):
+    lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=False)
+    pd.to_pickle(["not", "a", "dataframe"], lazy._descriptor_cache_path)
+
+    with pytest.raises(ValueError, match="right format"):
+        lazy._load_descriptor_cache()
+
+
 # ---------------------------------------------------------------------------
 # LazyMIL.run - full flow with fast monkeypatched descriptors/estimators
 # ---------------------------------------------------------------------------

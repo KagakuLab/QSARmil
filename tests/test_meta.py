@@ -1,5 +1,6 @@
 import os
 import pickle
+from typing import Any, cast
 
 import pandas as pd
 from conftest import MockEstimator
@@ -48,6 +49,38 @@ def test_init_default_creates_temp_dir():
     model = MultiConformerModel()
     assert os.path.isdir(model.output_folder)
     assert model.seed == 42
+
+
+def test_run_lazy_instantiates_lazymil(monkeypatch, tmp_path):
+    calls = {}
+
+    class FakeLazyMIL:
+        def __init__(self, **kwargs):
+            calls["kwargs"] = kwargs
+
+        def run(self, df_train, df_val, df_test):
+            calls["dfs"] = (df_train, df_val, df_test)
+
+    monkeypatch.setattr(meta_mod, "LazyMIL", FakeLazyMIL)
+
+    model = MultiConformerModel(
+        num_conf=3, hopt=True, num_cpu=2, output_folder=str(tmp_path / "out"), verbose=False, seed=7
+    )
+    df_train = pd.DataFrame({0: ["CCO"], 1: [1.0]})
+    df_val = pd.DataFrame({0: ["CCN"], 1: [2.0]})
+    df_test = pd.DataFrame({0: ["CCC"], 1: [3.0]})
+
+    model._run_lazy(df_train, df_val, df_test)
+
+    assert calls["kwargs"] == {
+        "num_conf": 3,
+        "hopt": True,
+        "num_cpu": 2,
+        "output_folder": str(tmp_path / "out"),
+        "verbose": False,
+        "seed": 7,
+    }
+    assert calls["dfs"] == (df_train, df_val, df_test)
 
 
 def test_run_predict_fills_missing_test_target(monkeypatch, tmp_path, capsys):
@@ -167,8 +200,25 @@ def test_predict_fallback_to_run_lazy_when_no_lazy_model(monkeypatch, tmp_path):
     try:
         model.predict(pd.DataFrame({0: ["CCF"]}))
         assert False, "predict should fail when lazy model is not trained"
-    except RuntimeError as e:
+    except RuntimeError:
         assert True
+
+
+def test_predict_raises_when_lazy_model_state_is_not_trained(tmp_path):
+    class FakeLazyMIL:
+        is_trained = False
+
+    model = MultiConformerModel(output_folder=str(tmp_path / "out"), verbose=False)
+    model._train_df = pd.DataFrame({0: ["CCO"], 1: [1.0]})
+    model._val_df = pd.DataFrame({0: ["CCN"], 1: [2.0]})
+    model.best_consensus = ["RDKitGEOM|Mock"]
+    model._lazy_model = cast(Any, FakeLazyMIL())
+
+    try:
+        model.predict(pd.DataFrame({0: ["CCF"]}))
+        assert False, "predict should fail when the stored LazyMIL artifact is not trained"
+    except RuntimeError as e:
+        assert "LazyMIL model is not trained" in str(e)
 
 
 def test_predict_fallback_to_mean_when_consensus_predictor_missing(monkeypatch, tmp_path):
