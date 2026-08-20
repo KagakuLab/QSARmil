@@ -172,13 +172,13 @@ class MultiConformerModel:
         pred_df = pred_df.rename(columns={0: "pred"})
         return pred_df
 
-    def save(self, model_path: str | Path) -> None:
+    def save(self, model_path: str | Path | None = None) -> None:
         """Serialize the trained model state to disk."""
 
         if not self.is_trained:
             raise RuntimeError("Model is not trained. Nothing to serialize.")
 
-        model_path = Path(model_path)
+        model_path = Path(model_path or Path(self.output_folder) / "model.pkl")
         state = {
             "num_conf": self.num_conf,
             "hopt": self.hopt,

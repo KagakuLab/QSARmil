@@ -1,7 +1,7 @@
 from __future__ import annotations
 # ruff: noqa: I001
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 import os
 import pickle
 import shutil
@@ -366,11 +366,67 @@ class LazyMIL:
         self._trained_models: dict[str, dict[str, Any]] = {}
         self._task_type: str | None = None
 
+        # Descriptor cache: persistent storage for computed descriptors
+        # DataFrame with columns: descriptor_name, SMILES, descriptor_vector
+        self._descriptor_cache_path = os.path.join(self.output_folder, "descriptor_cache.pkl")
+        self._descriptor_cache: pd.DataFrame = pd.DataFrame(
+            columns=["descriptor_name", "SMILES", "descriptor_vector"]
+        )
+
     @property
     def is_trained(self) -> bool:
         """Whether this instance has serialized-ready fitted model artifacts."""
 
         return bool(self._trained_models)
+
+    def _load_descriptor_cache(self) -> None:
+        """Load descriptor cache from disk if it exists."""
+        if os.path.exists(self._descriptor_cache_path):
+            loaded_data = pd.read_pickle(self._descriptor_cache_path)
+            if isinstance(loaded_data, pd.DataFrame):
+                self._descriptor_cache = loaded_data
+            else:
+                raise ValueError("Descriptor cache file not in the right format.")
+        else:
+            self._descriptor_cache = pd.DataFrame(
+                columns=["descriptor_name", "SMILES", "descriptor_vector"]
+            )
+
+    def _save_descriptor_cache(self) -> None:
+        """Save descriptor cache to disk."""
+        self._descriptor_cache.to_pickle(self._descriptor_cache_path)
+
+    def _get_cached_descriptors(
+        self, desc_name: str, smi_list: list[str]
+    ) -> tuple[list[np.ndarray | None], list[str]]:
+        """Retrieve descriptors from cache for multiple SMILES, returning found descriptors and uncached SMILES.
+
+        Args:
+            desc_name: Name of the descriptor type
+            smi_list: List of SMILES strings to look up
+
+        Returns:
+            A tuple of:
+            - List of descriptors (same order as smi_list, None for missing)
+            - List of SMILES strings that were not found in cache
+        """
+        smi_mask = self._descriptor_cache["SMILES"].isin(smi_list)
+        mask = (self._descriptor_cache["descriptor_name"] == desc_name) & (
+            smi_mask
+        )
+        results = self._descriptor_cache.loc[mask, :]
+        not_found = [x for x in smi_list if x not in results["SMILES"].values]
+        return results["descriptor_vector"], not_found
+
+    def _cache_descriptor(self, desc_name: str, smi: list[str], descriptor: list[np.ndarray]) -> None:
+        """Store a descriptor in cache using DataFrame append."""
+        new_row = pd.DataFrame({
+            "descriptor_name": len(smi) * [desc_name],
+            "SMILES": smi,
+            "descriptor_vector": descriptor,
+        })
+        self._descriptor_cache = pd.concat([self._descriptor_cache, new_row], ignore_index=True)
+        self._save_descriptor_cache()
 
     def run(self, df_train: pd.DataFrame, df_val: pd.DataFrame, df_test: pd.DataFrame) -> None:
         """Train every descriptor/estimator combination and write predictions to CSV.
@@ -490,10 +546,14 @@ class LazyMIL:
 
         This path only validates SMILES, generates conformers/descriptors,
         scales descriptors with stored scalers, and calls estimator.predict.
+        Uses persistent descriptor cache to avoid redundant calculations.
         """
 
         if not self.is_trained:
             raise RuntimeError("LazyMIL is not trained. Call `run` or `load` first.")
+
+        # Load existing descriptor cache
+        self._load_descriptor_cache()
 
         df_test = df_test.copy()
         if len(df_test.columns) == 1:
@@ -506,30 +566,39 @@ class LazyMIL:
         smi_test, y_test = list(df_test.iloc[:, 0]), list(df_test.iloc[:, 1])
         result_df_test["SMILES"], result_df_test["Y_TRUE"] = smi_test, y_test
 
-        conf_test = gen_conformers(
-            smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
-        )
-
-        descriptor_cache: dict[str, list[np.ndarray]] = {}
         descriptor_means: dict[str, np.ndarray] = {}
         for model_state in self._trained_models.values():
             descriptor_means[model_state["descriptor"]] = model_state["train_col_means"]
-
+        confs = None
         for desc_name, col_means in descriptor_means.items():
             if desc_name not in DESCRIPTORS:
                 raise ValueError(
                     f"Descriptor '{desc_name}' was used during training but isn't available in current DESCRIPTORS."
                 )
-            desc_calc = DESCRIPTORS[desc_name]()
-            descriptor_cache[desc_name] = list(
-                calc_descriptors(conf_test, desc_calc, verbose=False, col_means=col_means)
+            _, smiles_needing_conformers = (
+                self._get_cached_descriptors(desc_name, smi_test)
             )
+
+            if smiles_needing_conformers:
+                desc_calc = DESCRIPTORS[desc_name]()
+                if confs is None:
+                    confs = gen_conformers(
+                        smiles_needing_conformers,
+                        num_conf=self.num_conf,
+                        num_cpu=self.num_cpu,
+                        verbose=self.verbose,
+                        seed=self.seed,
+                    )
+                calculated_test_descs = calc_descriptors(confs, desc_calc, verbose=False, col_means=col_means)
+                self._cache_descriptor(desc_name, smiles_needing_conformers, calculated_test_descs)
 
         for model_name, model_state in self._trained_models.items():
             desc_name = model_state["descriptor"]
             scaler = model_state["scaler"]
             estimator = model_state["estimator"]
-            x_test_scaled = scaler.transform(descriptor_cache[desc_name])
+            x_test, missing = self._get_cached_descriptors(desc_name, smi_test)
+            assert not missing
+            x_test_scaled = scaler.transform(x_test)
             _ensure_estimator_predict_ready(estimator)
             try:
                 preds = estimator.predict(x_test_scaled)
