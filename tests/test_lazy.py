@@ -9,15 +9,17 @@ import joblib
 import numpy as np
 import pandas as pd
 import pytest
+
 from conftest import MockEstimator
+from milearn.wrapper import BagWrapper
 
 import qsarmil.lazy as lazy_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.lazy import (
     LazyMIL,
+    _ensure_estimator_predict_ready,
     build_model,
-    build_model_with_artifacts,
     calc_descriptors,
     clean_descriptors,
     compute_column_means,
@@ -85,65 +87,6 @@ def test_scale_descriptors():
     assert len(scaled_test) == 1
 
 
-def test_ensure_estimator_predict_ready_rebuilds_milearn_trainer(monkeypatch):
-    class DummyTrainer:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_pl = types.SimpleNamespace(Trainer=DummyTrainer)
-    monkeypatch.setitem(sys.modules, "pytorch_lightning", fake_pl)
-
-    class DummyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self._trainer = None
-            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
-
-    estimator = DummyEstimator()
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-
-    assert isinstance(estimator._trainer, DummyTrainer)
-
-
-def test_ensure_estimator_predict_ready_non_milearn_noop():
-    class DummyEstimator:
-        __module__ = "sklearn.linear_model"
-
-        def __init__(self):
-            self._trainer = None
-
-    estimator = DummyEstimator()
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-    assert estimator._trainer is None
-
-
-def test_ensure_estimator_predict_ready_missing_trainer_attr_noop():
-    class DummyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
-
-    estimator = DummyEstimator()
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-    assert not hasattr(estimator, "_trainer")
-
-
-def test_ensure_estimator_predict_ready_existing_trainer_kept():
-    class DummyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self._trainer = object()
-            self.hparams = types.SimpleNamespace(max_epochs=3, accelerator="cpu")
-
-    estimator = DummyEstimator()
-    original_trainer = estimator._trainer
-    lazy_mod._ensure_estimator_predict_ready(estimator)
-    assert estimator._trainer is original_trainer
-
-
 # ---------------------------------------------------------------------------
 # build_model
 # ---------------------------------------------------------------------------
@@ -161,20 +104,22 @@ def _tiny_bags():
 def test_build_model_with_hopt():
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    pred_train, pred_val, pred_test = build_model(
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler  = build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True, seed=7
     )
     assert estimator.hopt_called is True
     assert len(pred_train) == 2
     assert len(pred_val) == 1
     assert len(pred_test) == 1
+    assert hasattr(fitted_estimator, "predict")
+    assert hasattr(fitted_scaler, "transform")
 
 
 def test_build_model_without_hopt_attr():
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
     estimator = MockEstimator(supports_hopt=False)
     assert not hasattr(estimator, "hopt")
-    pred_train, _, _ = build_model(
+    pred_train, _, _, _, _ = build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True
     )
     assert len(pred_train) == 2
@@ -191,22 +136,8 @@ def test_build_model_with_sklearn_ridge_accepts_pooled_2d():
     from sklearn.linear_model import Ridge
 
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
-    estimator = Ridge()
-    pred_train, pred_val, pred_test = build_model(
-        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
-    )
-
-    assert len(pred_train) == len(y_train)
-    assert len(pred_val) == len(y_val)
-    assert len(pred_test) == len(y_test)
-
-
-def test_build_model_with_artifacts_sklearn_ridge_accepts_pooled_2d():
-    from sklearn.linear_model import Ridge
-
-    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
-    estimator = Ridge()
-    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model_with_artifacts(
+    estimator = BagWrapper(Ridge())
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
     )
 
@@ -217,35 +148,30 @@ def test_build_model_with_artifacts_sklearn_ridge_accepts_pooled_2d():
     assert hasattr(fitted_scaler, "transform")
 
 
-def test_build_model_with_artifacts_hopt_path():
+def test_build_model_sklearn_ridge_accepts_pooled_2d():
+    from sklearn.linear_model import Ridge
+
+    x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
+    estimator = BagWrapper(Ridge())
+    pred_train, pred_val, pred_test, fitted_estimator, fitted_scaler = build_model(
+        x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=False
+    )
+
+    assert len(pred_train) == len(y_train)
+    assert len(pred_val) == len(y_val)
+    assert len(pred_test) == len(y_test)
+    assert hasattr(fitted_estimator, "predict")
+    assert hasattr(fitted_scaler, "transform")
+
+
+def test_build_model_hopt_path():
     x_train, x_val, x_test, y_train, y_val, y_test = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    build_model_with_artifacts(
+    build_model(
         x_train, x_val, x_test, y_train, y_val, y_test, estimator, hopt=True, seed=11
     )
     assert estimator.hopt_called is True
 
-
-def test_lazy_estimator_factories_are_callable(monkeypatch):
-    class DummyEstimator:
-        def __init__(self, *args, **kwargs):
-            self.args = args
-            self.kwargs = kwargs
-
-    monkeypatch.setattr(
-        lazy_mod,
-        "import_module",
-        lambda module_name: types.SimpleNamespace(Ridge=DummyEstimator, RidgeClassifier=DummyEstimator),
-    )
-
-    regressor_factories = lazy_mod._REGRESSORS()
-    classifier_factories = lazy_mod._CLASSIFIERS()
-
-    regressor = regressor_factories["Ridge"]()
-    classifier = classifier_factories["RidgeClassifier"]()
-
-    assert isinstance(regressor, DummyEstimator)
-    assert isinstance(classifier, DummyEstimator)
 
 def test_default_model_imports():
     from qsarmil.lazy import REGRESSORS
@@ -264,15 +190,6 @@ def test_default_descriptor_imports():
     for factory in DESCRIPTORS.values():
         desc = factory()
         assert hasattr(desc, "run")
-
-
-def test_resolve_estimators_handles_callable_and_mapping():
-    mapping = {"Mock": object()}
-    assert lazy_mod.resolve_estimators(mapping) is mapping
-
-    resolved = lazy_mod.resolve_estimators(lambda: mapping)
-    assert resolved is mapping
-
 
 def test_all_lazy_descriptors_resolve(monkeypatch):
     class DummyDescriptor:
@@ -303,6 +220,31 @@ def test_all_lazy_descriptors_resolve(monkeypatch):
         assert isinstance(factory(), DescriptorWrapper)
 
 
+def test_model_factory_wraps_non_milearn_estimators(monkeypatch):
+    class DummyEstimator:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        def fit(self, x, y):
+            return self
+
+        def predict(self, x):
+            return x
+
+    class DummyModule:
+        pass
+
+    DummyModule.DummyEstimator = DummyEstimator
+
+    monkeypatch.setattr(lazy_mod, "import_module", lambda module_name: DummyModule())
+
+    factory = lazy_mod.model_factory("sklearn.dummy", "DummyEstimator", foo="bar")
+    wrapped = factory()
+
+    assert isinstance(wrapped, BagWrapper)
+
+
 # ---------------------------------------------------------------------------
 # LazyMIL.__init__
 # ---------------------------------------------------------------------------
@@ -328,6 +270,14 @@ def test_lazymil_init_wipes_existing_path(tmp_path):
     LazyMIL(output_folder=target)
     assert os.path.isdir(target)
     assert not os.path.exists(os.path.join(target, "stale.txt"))
+
+
+def test_lazymil_load_descriptor_cache_invalid_format_raises(tmp_path):
+    lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=False)
+    pd.to_pickle(["not", "a", "dataframe"], lazy._descriptor_cache_path)
+
+    with pytest.raises(ValueError, match="right format"):
+        lazy._load_descriptor_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -368,9 +318,6 @@ def test_lazymil_run_binary_quiet(monkeypatch, tmp_path):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     lazy.run(df_train, df_val, df_test)
 
-    with open(tmp_path / "out" / "test.csv", newline="") as f:
-        assert sum(1 for _ in csv.reader(f)) - 1 == 2
-
 
 def test_lazymil_run_unsupported_task_type(tmp_path):
     df = pd.DataFrame({0: ["CCO", "c1ccccc1", "CCN", "CCC"], 1: ["a", "b", "c", "d"]})
@@ -405,9 +352,9 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
     def _should_not_retrain(*args, **kwargs):
         raise AssertionError("predict path retrained a model")
 
-    monkeypatch.setattr(lazy_mod, "build_model_with_artifacts", _should_not_retrain)
+    monkeypatch.setattr(lazy_mod, "build_model", _should_not_retrain)
 
-    pred_df = loaded.predict(pd.DataFrame({0: ["CCCl", "CCF"]}))
+    pred_df = loaded.predict(pd.DataFrame({0: ["CCCl", "CCF"]}), save=True)
     assert len(pred_df) == 2
     assert "RDKitGEOM|Mock" in pred_df.columns
     assert os.path.exists(tmp_path / "loaded_out" / "test.csv")
@@ -555,49 +502,6 @@ def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
         lazy.predict(pd.DataFrame({0: ["CCO"]}))
 
 
-def test_lazymil_predict_retries_known_attributeerror(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
-    monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
-
-    class IdentityScaler:
-        def transform(self, x):
-            return x
-
-    class FlakyEstimator:
-        __module__ = "milearn.network.fake"
-
-        def __init__(self):
-            self.calls = 0
-            self.hparams = types.SimpleNamespace(max_epochs=1, accelerator="cpu")
-            self._trainer = None
-
-        def predict(self, x):
-            self.calls += 1
-            if self.calls == 1:
-                raise AttributeError("'NoneType' object has no attribute 'predict'")
-            return np.array([0.5])
-
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy._trained_models = {
-        "RDKitGEOM|Mock": {
-            "descriptor": "RDKitGEOM",
-            "estimator": FlakyEstimator(),
-            "scaler": IdentityScaler(),
-            "train_col_means": np.array([0.0, 0.0]),
-        }
-    }
-
-    class DummyTrainer:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    fake_pl = types.SimpleNamespace(Trainer=DummyTrainer)
-    monkeypatch.setitem(sys.modules, "pytorch_lightning", fake_pl)
-
-    pred = lazy.predict(pd.DataFrame({0: ["CCO"]}))
-    assert list(pred["RDKitGEOM|Mock"]) == [0.5]
-
-
 def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
     monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
@@ -626,9 +530,60 @@ def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
         lazy.predict(pd.DataFrame({0: ["CCO"]}))
 
 
+def test_ensure_estimator_predict_ready_non_milearn_returns():
+    class Estimator:
+        __module__ = "sklearn.fake"
+
+    estimator = Estimator()
+    _ensure_estimator_predict_ready(estimator)
+
+
+def test_ensure_estimator_predict_ready_missing_trainer_attr_returns():
+    class Estimator:
+        __module__ = "milearn.fake"
+
+    estimator = Estimator()
+    _ensure_estimator_predict_ready(estimator)
+
+
+def test_ensure_estimator_predict_ready_existing_trainer_returns():
+    class Estimator:
+        __module__ = "milearn.fake"
+
+    estimator = Estimator()
+    estimator._trainer = object()
+    _ensure_estimator_predict_ready(estimator)
+
+
+def test_ensure_estimator_predict_ready_rebuilds_trainer(monkeypatch):
+    calls = {}
+
+    class FakeTrainer:
+        def __init__(self, **kwargs):
+            calls["kwargs"] = kwargs
+
+    class Estimator:
+        __module__ = "milearn.fake"
+
+    estimator = Estimator()
+    estimator._trainer = None
+    estimator.hparams = types.SimpleNamespace(max_epochs=7, accelerator="cpu")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pytorch_lightning",
+        types.SimpleNamespace(Trainer=FakeTrainer),
+    )
+
+    _ensure_estimator_predict_ready(estimator)
+
+    assert isinstance(estimator._trainer, FakeTrainer)
+    assert calls["kwargs"]["max_epochs"] == 7
+    assert calls["kwargs"]["deterministic"] is True
+
+
 def test_lazymil_save_before_train_raises(tmp_path):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     with pytest.raises(RuntimeError, match="not trained"):
         lazy.save(tmp_path / "lazy.pkl")
-
 

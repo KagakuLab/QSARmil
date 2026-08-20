@@ -60,8 +60,6 @@ class MultiConformerModel:
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.verbose = verbose
         self.seed = seed
-        self._train_df: pd.DataFrame | None = None
-        self._val_df: pd.DataFrame | None = None
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None
         self._lazy_model: LazyMIL | None = None
@@ -70,7 +68,7 @@ class MultiConformerModel:
     def is_trained(self) -> bool:
         """Whether :meth:`train` has produced a reusable consensus."""
 
-        return self._train_df is not None and self._val_df is not None and bool(self.best_consensus)
+        return bool(self.best_consensus)
 
     def _ensure_test_target_column(self, df_test: pd.DataFrame) -> pd.DataFrame:
         """Ensure test data has at least two columns for LazyMIL compatibility."""
@@ -80,18 +78,6 @@ class MultiConformerModel:
             df_test[1] = [None for _ in df_test.index]
         return df_test
 
-    def _run_lazy(self, df_train: pd.DataFrame, df_val: pd.DataFrame, df_test: pd.DataFrame) -> None:
-        """Run LazyMIL with the current configuration."""
-
-        lazy_ml = LazyMIL(
-            num_conf=self.num_conf,
-            hopt=self.hopt,
-            num_cpu=self.num_cpu,
-            output_folder=self.output_folder,
-            verbose=self.verbose,
-            seed=self.seed,
-        )
-        lazy_ml.run(df_train, df_val, df_test)
 
     def train(self, df_train: pd.DataFrame) -> MultiConformerModel:
         """Train/model-select once and cache everything required for later prediction.
@@ -128,8 +114,6 @@ class MultiConformerModel:
         cons_search = GeneticSearch(cons_size="auto", n_iter=50)
         best_cons = cons_search.run(x_val, true_val)
 
-        self._train_df = train_df.reset_index(drop=True)
-        self._val_df = val_df.reset_index(drop=True)
         self.best_consensus = list(best_cons)
         self._consensus_search = cons_search
         self._lazy_model = lazy_ml
@@ -140,7 +124,7 @@ class MultiConformerModel:
 
         return self
 
-    def predict(self, df_test: pd.DataFrame) -> pd.DataFrame:
+    def predict(self, df_test: pd.DataFrame, save: bool = False) -> pd.DataFrame:
         """Predict for a new test dataframe using the stored trained state."""
 
         if not self.is_trained:
@@ -148,12 +132,10 @@ class MultiConformerModel:
 
         df_test = self._ensure_test_target_column(df_test)
         if self._lazy_model is not None and self._lazy_model.is_trained:
-            self._lazy_model.predict(df_test)
+            res_test = self._lazy_model.predict(df_test, save=save)
         else:
-            # Backward-compatible fallback for older serialized states.
-            self._run_lazy(self._train_df, self._val_df, df_test)
+            raise RuntimeError("LazyMIL model is not trained. Call `train` or `load` first.")
 
-        res_test = pd.read_csv(f"{self.output_folder}/test.csv")
         x_test = res_test.iloc[:, 2:]
 
         missing_cols = [c for c in self.best_consensus if c not in x_test.columns]
@@ -175,42 +157,27 @@ class MultiConformerModel:
         pred_df = pred_df.rename(columns={0: "pred"})
         return pred_df
 
-    def save(self, model_path: str | Path) -> None:
-        """Serialize the trained model state to disk using the LazyMIL structure.
-
-        Args:
-            model_path (str | Path): Directory where the model should be saved.
-        """
+    def save(self, model_path: str | Path | None = None) -> None:
+        """Serialize the trained model state to disk."""
 
         if not self.is_trained:
             raise RuntimeError("Model is not trained. Nothing to serialize.")
 
-        model_path = Path(model_path)
+        model_path = Path(model_path or Path(self.output_folder) / "model.pkl")
         model_path.mkdir(parents=True, exist_ok=True)
 
-        # Save the dataframes as CSVs
-        if self._train_df is not None:
-            train_csv = model_path / "train.csv"
-            self._train_df.to_csv(train_csv, index=False)
-        if self._val_df is not None:
-            val_csv = model_path / "val.csv"
-            self._val_df.to_csv(val_csv, index=False)
-
-        # Save metadata
-        metadata = {
+        state = {
             "num_conf": self.num_conf,
             "hopt": self.hopt,
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
             "best_consensus": self.best_consensus,
-            "train_df_csv": str(model_path / "train.csv") if self._train_df is not None else None,
-            "val_df_csv": str(model_path / "val.csv") if self._val_df is not None else None,
         }
 
         # Save metadata
         with model_path.joinpath("metadata.json").open("w") as f:
-            json.dump(metadata, f, indent=4)
+            json.dump(state, f, indent=4)
 
         # Save the underlying LazyMIL model
         if self._lazy_model is not None:
@@ -239,28 +206,39 @@ class MultiConformerModel:
             verbose=metadata["verbose"],
             seed=metadata["seed"],
         )
-
         model.best_consensus = list(metadata["best_consensus"])
-
-        if metadata["train_df_csv"] is not None:
-            model._train_df = pd.read_csv(metadata["train_df_csv"])
-        if metadata["val_df_csv"] is not None:
-            model._val_df = pd.read_csv(metadata["val_df_csv"])
-
-        # Load the underlying LazyMIL model if it was saved
-        lazy_model_path = model_path / "models" / "consensus_model"
-        if lazy_model_path.exists():
-            model._lazy_model = LazyMIL.load(str(lazy_model_path), output_folder=model.output_folder)
-
+        model._consensus_search = metadata.get("consensus_search")
+        lazy_model_raw = metadata.get("lazy_model")
+        if lazy_model_raw is not None:
+            if isinstance(lazy_model_raw, LazyMIL):
+                model._lazy_model = lazy_model_raw
+            else:
+                # Deserialized from JSON as a dict; reconstruct.
+                lazy_path = model_path / "models" / "consensus_model"
+                model._lazy_model = LazyMIL.load(str(lazy_path), output_folder=model.output_folder)
+            if model._lazy_model is not None:
+                model._lazy_model.output_folder = model.output_folder
+                if os.path.exists(model.output_folder):
+                    shutil.rmtree(model.output_folder)
+                os.makedirs(model.output_folder)
+        else:
+            # lazy_model wasn't in metadata.json — try loading from disk
+            lazy_path = model_path / "models" / "consensus_model"
+            if lazy_path.exists():
+                model._lazy_model = LazyMIL.load(str(lazy_path), output_folder=model.output_folder)
+                model._lazy_model.output_folder = model.output_folder
+                if os.path.exists(model.output_folder):
+                    shutil.rmtree(model.output_folder)
+                os.makedirs(model.output_folder)
+            else:
+                model._lazy_model = None
         return model
 
-    @staticmethod
-    def predictFromSMILES(model_path: str | Path, smiles: list[str] | pd.Series) -> pd.DataFrame:
+    def predictFromSMILES(self, smiles: list[str] | pd.Series) -> pd.DataFrame:
         """Load a serialized model and predict directly from SMILES strings."""
 
-        model = MultiConformerModel.load(model_path)
         df_test = pd.DataFrame({0: list(smiles)})
-        return model.predict(df_test)
+        return self.predict(df_test)
 
     def run_predict(self, df_train: pd.DataFrame, df_test: pd.DataFrame) -> pd.DataFrame:
         """Backwards-compatible one-shot API: train then predict.
