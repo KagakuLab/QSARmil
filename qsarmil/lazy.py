@@ -221,39 +221,6 @@ def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tu
     scaler.fit(x_train)
     return scaler.transform(x_train), scaler.transform(x_test)
 
-
-def _ensure_estimator_predict_ready(estimator_instance: Any) -> None:
-    """Rebuild missing runtime trainer for milearn estimators after unpickling.
-
-    milearn's pickle protocol intentionally drops ``_trainer``. In inference-only
-    sessions (load -> predict), this helper recreates a prediction-capable
-    trainer so ``estimator.predict`` can run without retraining.
-    """
-
-    module_name = estimator_instance.__class__.__module__
-    if not module_name.startswith("milearn."):
-        return
-
-    if not hasattr(estimator_instance, "_trainer"):
-        return
-
-    if estimator_instance._trainer is not None:
-        return
-
-    import pytorch_lightning as pl
-
-    hparams = estimator_instance.hparams
-    estimator_instance._trainer = pl.Trainer(
-        max_epochs=getattr(hparams, "max_epochs", 1),
-        callbacks=[],
-        accelerator=getattr(hparams, "accelerator", "cpu"),
-        logger=False,
-        enable_model_summary=False,
-        enable_progress_bar=False,
-        enable_checkpointing=False,
-        deterministic=True,
-    )
-
 # ==========================================================
 # ModelBuilder Class
 # ==========================================================
@@ -378,6 +345,40 @@ class LazyMIL:
         """Whether this instance has serialized-ready fitted model artifacts."""
 
         return bool(self._trained_models)
+
+    def _ensure_estimator_predict_ready(self, estimator_instance: Any) -> None:
+        """Rebuild missing runtime trainer for milearn estimators after unpickling.
+    
+        milearn's pickle protocol intentionally drops ``_trainer``. In inference-only
+        sessions (load -> predict), this helper recreates a prediction-capable
+        trainer so ``estimator.predict`` can run without retraining.
+        """
+    
+        module_name = estimator_instance.__class__.__module__
+        if not module_name.startswith("milearn."):
+            return
+    
+        if not hasattr(estimator_instance, "_trainer"):
+            return
+    
+        if estimator_instance._trainer is not None:
+            return
+    
+        import pytorch_lightning as pl
+    
+        hparams = estimator_instance.hparams
+        if self.verbose:
+            print(f"Rebuilding trainer for {estimator_instance} with parameters: \n{hparams}")
+        estimator_instance._trainer = pl.Trainer(
+            max_epochs=getattr(hparams, "max_epochs", 1),
+            callbacks=[],
+            logger=False,
+            accelerator=getattr(hparams, "accelerator", "cpu"),
+            enable_model_summary=False,
+            enable_progress_bar=False,
+            enable_checkpointing=False,
+            deterministic=True,
+        )
 
     def _load_descriptor_cache(self) -> None:
         """Load descriptor cache from disk if it exists."""
@@ -578,6 +579,8 @@ class LazyMIL:
             _, smiles_needing_conformers = (
                 self._get_cached_descriptors(desc_name, smi_test)
             )
+            if self.verbose and not smiles_needing_conformers:
+                print(f"Using cached descriptor values for {desc_name}")
 
             if smiles_needing_conformers:
                 desc_calc = DESCRIPTORS[desc_name]()
@@ -599,6 +602,7 @@ class LazyMIL:
             x_test, missing = self._get_cached_descriptors(desc_name, smi_test)
             assert not missing
             x_test_scaled = scaler.transform(x_test)
+            self._ensure_estimator_predict_ready(estimator)
             preds = estimator.predict(x_test_scaled)
             result_df_test[model_name] = list(preds)
         if save:
