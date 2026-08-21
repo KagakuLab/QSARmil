@@ -14,7 +14,6 @@ from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.lazy import (
     LazyMIL,
-    _ensure_estimator_predict_ready,
     build_model,
     calc_descriptors,
     clean_descriptors,
@@ -402,32 +401,32 @@ def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
         lazy.predict(pd.DataFrame({0: ["CCO"]}))
 
 
-def test_ensure_estimator_predict_ready_non_milearn_returns():
+@pytest.mark.parametrize(
+    ("module_name", "has_trainer", "trainer"),
+    [
+        ("sklearn.fake", False, None),
+        ("milearn.fake", False, None),
+        ("milearn.fake", True, object()),
+    ],
+)
+def test_lazymil_ensure_estimator_predict_ready_returns_early(
+    tmp_path, module_name, has_trainer, trainer
+):
     class Estimator:
-        __module__ = "sklearn.fake"
+        pass
 
     estimator = Estimator()
-    _ensure_estimator_predict_ready(estimator)
+    estimator.__class__.__module__ = module_name
+    if has_trainer:
+        estimator._trainer = trainer
+
+    lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=False)
+    lazy._ensure_estimator_predict_ready(estimator)
 
 
-def test_ensure_estimator_predict_ready_missing_trainer_attr_returns():
-    class Estimator:
-        __module__ = "milearn.fake"
-
-    estimator = Estimator()
-    _ensure_estimator_predict_ready(estimator)
-
-
-def test_ensure_estimator_predict_ready_existing_trainer_returns():
-    class Estimator:
-        __module__ = "milearn.fake"
-
-    estimator = Estimator()
-    estimator._trainer = object()
-    _ensure_estimator_predict_ready(estimator)
-
-
-def test_ensure_estimator_predict_ready_rebuilds_trainer(monkeypatch):
+def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer(
+    monkeypatch, tmp_path, capsys
+):
     calls = {}
 
     class FakeTrainer:
@@ -447,16 +446,16 @@ def test_ensure_estimator_predict_ready_rebuilds_trainer(monkeypatch):
         types.SimpleNamespace(Trainer=FakeTrainer),
     )
 
-    _ensure_estimator_predict_ready(estimator)
+    lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=True)
+    lazy._ensure_estimator_predict_ready(estimator)
 
     assert isinstance(estimator._trainer, FakeTrainer)
     assert calls["kwargs"]["max_epochs"] == 7
     assert calls["kwargs"]["deterministic"] is True
+    assert "Rebuilding trainer" in capsys.readouterr().out
 
 
 def test_lazymil_save_before_train_raises(tmp_path):
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     with pytest.raises(RuntimeError, match="not trained"):
         lazy.save(tmp_path / "lazy.pkl")
-
-
