@@ -4,6 +4,7 @@ import os
 import pickle
 import shutil
 import tempfile
+import json
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +164,8 @@ class MultiConformerModel:
             raise RuntimeError("Model is not trained. Nothing to serialize.")
 
         model_path = Path(model_path or Path(self.output_folder) / "model.pkl")
+        model_path.mkdir(parents=True, exist_ok=True)
+
         state = {
             "num_conf": self.num_conf,
             "hopt": self.hopt,
@@ -170,44 +173,65 @@ class MultiConformerModel:
             "verbose": self.verbose,
             "seed": self.seed,
             "best_consensus": self.best_consensus,
-            "consensus_search": self._consensus_search,
-            "lazy_model": self._lazy_model,
         }
 
-        # Some environments may not allow pickling the qsarcons search object.
-        try:
-            pickle.dumps(state["consensus_search"])
-        except (pickle.PickleError, AttributeError, TypeError):
-            state["consensus_search"] = None
+        # Save metadata
+        with model_path.joinpath("metadata.json").open("w") as f:
+            json.dump(state, f, indent=4)
 
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        with model_path.open("wb") as f:
-            pickle.dump(state, f)
+        # Save the underlying LazyMIL model
+        if self._lazy_model is not None:
+            models_dir = model_path / "models"
+            self._lazy_model.save(models_dir / "consensus_model")
+
 
     @classmethod
     def load(cls, model_path: str | Path, output_folder: str | None = None) -> MultiConformerModel:
-        """Load a serialized model state."""
+        """Load a serialized model state from the structured directory."""
 
         model_path = Path(model_path)
-        with model_path.open("rb") as f:
-            state = pickle.load(f)
+        metadata_file = model_path / "metadata.json"
+
+        if not metadata_file.exists():
+            raise FileNotFoundError(f"Metadata file not found at {metadata_file}")
+
+        with metadata_file.open("r") as f:
+            metadata = json.load(f)
 
         model = cls(
-            num_conf=state["num_conf"],
-            hopt=state["hopt"],
-            num_cpu=state["num_cpu"],
+            num_conf=metadata["num_conf"],
+            hopt=metadata["hopt"],
+            num_cpu=metadata["num_cpu"],
             output_folder=output_folder,
-            verbose=state["verbose"],
-            seed=state["seed"],
+            verbose=metadata["verbose"],
+            seed=metadata["seed"],
         )
-        model.best_consensus = list(state["best_consensus"])
-        model._consensus_search = state.get("consensus_search")
-        model._lazy_model = state.get("lazy_model")
-        if model._lazy_model is not None:
-            model._lazy_model.output_folder = model.output_folder
-            if os.path.exists(model.output_folder):
-                shutil.rmtree(model.output_folder)
-            os.makedirs(model.output_folder)
+        model.best_consensus = list(metadata["best_consensus"])
+        model._consensus_search = metadata.get("consensus_search")
+        lazy_model_raw = metadata.get("lazy_model")
+        if lazy_model_raw is not None:
+            if isinstance(lazy_model_raw, LazyMIL):
+                model._lazy_model = lazy_model_raw
+            else:
+                # Deserialized from JSON as a dict; reconstruct.
+                lazy_path = model_path / "models" / "consensus_model"
+                model._lazy_model = LazyMIL.load(str(lazy_path), output_folder=model.output_folder)
+            if model._lazy_model is not None:
+                model._lazy_model.output_folder = model.output_folder
+                if os.path.exists(model.output_folder):
+                    shutil.rmtree(model.output_folder)
+                os.makedirs(model.output_folder)
+        else:
+            # lazy_model wasn't in metadata.json — try loading from disk
+            lazy_path = model_path / "models" / "consensus_model"
+            if lazy_path.exists():
+                model._lazy_model = LazyMIL.load(str(lazy_path), output_folder=model.output_folder)
+                model._lazy_model.output_folder = model.output_folder
+                if os.path.exists(model.output_folder):
+                    shutil.rmtree(model.output_folder)
+                os.makedirs(model.output_folder)
+            else:
+                model._lazy_model = None
         return model
 
     def predictFromSMILES(self, smiles: list[str] | pd.Series) -> pd.DataFrame:

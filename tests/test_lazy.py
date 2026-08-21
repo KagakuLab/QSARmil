@@ -1,7 +1,11 @@
 import csv
+import json
 import os
+import pickle
+import sys
 import types
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
@@ -353,6 +357,130 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
     assert len(pred_df) == 2
     assert "RDKitGEOM|Mock" in pred_df.columns
     assert os.path.exists(tmp_path / "loaded_out" / "test.csv")
+
+
+def test_lazymil_save_load_new_directory_format(monkeypatch, tmp_path):
+    """Exercise the new directory format code path (no .pkl at root)."""
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1"], 1: [1.1, 2.2]})
+    df_val = pd.DataFrame({0: ["CCN", "CCC"], 1: [1.6, 2.6]})
+    df_test = pd.DataFrame({0: ["CCCl", "CCF"], 1: [0.6, 1.6]})
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.run(df_train, df_val, df_test)
+
+    model_path = tmp_path / "lazymil_dir"
+    lazy.save(model_path)
+    # Remove any .pkl file so load() takes the new directory format path
+    for pkl in model_path.glob("*.pkl"):
+        pkl.unlink()
+
+    loaded = LazyMIL.load(model_path, output_folder=str(tmp_path / "loaded_out"))
+    assert loaded.is_trained is True
+    assert len(loaded._trained_models) == 1
+
+
+def test_lazymil_load_file_path(monkeypatch, tmp_path):
+    """Exercise the non-directory (file) code path in load()."""
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1"], 1: [1.1, 2.2]})
+    df_val = pd.DataFrame({0: ["CCN", "CCC"], 1: [1.6, 2.6]})
+    df_test = pd.DataFrame({0: ["CCCl", "CCF"], 1: [0.6, 1.6]})
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.run(df_train, df_val, df_test)
+
+    model_path = tmp_path / "lazymil.pkl"
+    lazy.save(model_path)
+    # save() creates a directory; verify no .pkl files inside it
+    assert list(model_path.glob("*.pkl")) == []
+
+    # Create a standalone .pkl file at the tmp_path root
+    pkl_file = tmp_path / "model.pkl"
+    import pickle
+    with model_path.joinpath("metadata.json").open("r") as f:
+        main_metadata = json.load(f)
+    state = {
+        "hopt": main_metadata["hopt"],
+        "num_conf": main_metadata["num_conf"],
+        "num_cpu": main_metadata["num_cpu"],
+        "verbose": main_metadata["verbose"],
+        "seed": main_metadata["seed"],
+        "task_type": main_metadata.get("task_type"),
+        "trained_models": {},
+    }
+    for model_name in main_metadata["trained_models"]:
+        model_subdir = model_path / "models" / model_name
+        with model_subdir.joinpath("metadata.json").open("r") as f:
+            model_metadata = json.load(f)
+        model_state = {
+            "descriptor": model_metadata["descriptor"],
+            "train_col_means": np.array(model_metadata["train_col_means"]),
+            "estimator": joblib.load(model_subdir / "estimator.joblib"),
+            "scaler": joblib.load(model_subdir / "scaler.joblib"),
+        }
+        state["trained_models"][model_name] = model_state
+    with pkl_file.open("wb") as f:
+        pickle.dump(state, f)
+
+    loaded = LazyMIL.load(pkl_file, output_folder=str(tmp_path / "loaded_out"))
+    assert loaded.is_trained is True
+
+
+def test_lazymil_load_directory_with_pkl(monkeypatch, tmp_path):
+    """Exercise the .pkl branch inside the directory case in load()."""
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    df_train = pd.DataFrame({0: ["CCO", "c1ccccc1"], 1: [1.1, 2.2]})
+    df_val = pd.DataFrame({0: ["CCN", "CCC"], 1: [1.6, 2.6]})
+    df_test = pd.DataFrame({0: ["CCCl", "CCF"], 1: [0.6, 1.6]})
+
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.run(df_train, df_val, df_test)
+
+    model_path = tmp_path / "lazymil_dir"
+    lazy.save(model_path)
+    # save() creates a directory; verify no .pkl files inside it
+    assert list(model_path.glob("*.pkl")) == []
+
+    # Create a .pkl file inside the directory
+    pkl_inside = model_path / "model.pkl"
+    with model_path.joinpath("metadata.json").open("r") as f:
+        main_metadata = json.load(f)
+    state = {
+        "hopt": main_metadata["hopt"],
+        "num_conf": main_metadata["num_conf"],
+        "num_cpu": main_metadata["num_cpu"],
+        "verbose": main_metadata["verbose"],
+        "seed": main_metadata["seed"],
+        "task_type": main_metadata.get("task_type"),
+        "trained_models": {},
+    }
+    for model_name in main_metadata["trained_models"]:
+        model_subdir = model_path / "models" / model_name
+        with model_subdir.joinpath("metadata.json").open("r") as f:
+            model_metadata = json.load(f)
+        model_state = {
+            "descriptor": model_metadata["descriptor"],
+            "train_col_means": np.array(model_metadata["train_col_means"]),
+            "estimator": joblib.load(model_subdir / "estimator.joblib"),
+            "scaler": joblib.load(model_subdir / "scaler.joblib"),
+        }
+        state["trained_models"][model_name] = model_state
+    with pkl_inside.open("wb") as f:
+        pickle.dump(state, f)
+
+    # Verify .pkl is inside the directory
+    assert len(list(model_path.glob("*.pkl"))) == 1
+
+    # Load should take the .pkl branch
+    loaded = LazyMIL.load(model_path, output_folder=str(tmp_path / "loaded_out"))
+    assert loaded.is_trained is True
 
 
 def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):

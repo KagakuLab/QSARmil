@@ -3,6 +3,7 @@ import pickle
 from typing import Any, cast
 
 import pandas as pd
+import pytest
 from conftest import MockEstimator
 
 import qsarmil.lazy as lazy_mod
@@ -234,5 +235,17 @@ def test_save_handles_unpicklable_consensus(monkeypatch, tmp_path):
 
     loaded = MultiConformerModel.load(model_path)
     assert loaded._consensus_search is None
+
+
+def test_load_raises_on_missing_metadata(monkeypatch, tmp_path):
+    """Exercise the raise FileNotFoundError path in MultiConformerModel.load()."""
+    _patch_fast_pipeline(monkeypatch)
+
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="Metadata file not found"):
+        MultiConformerModel.load(empty_dir)
+
 
 
