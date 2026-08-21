@@ -579,6 +579,8 @@ class LazyMIL:
             _, smiles_needing_conformers = (
                 self._get_cached_descriptors(desc_name, smi_test)
             )
+            if self.verbose and not smiles_needing_conformers:
+                print(f"Using cached descriptor values for {desc_name}")
 
             if smiles_needing_conformers:
                 desc_calc = DESCRIPTORS[desc_name]()

@@ -373,6 +373,33 @@ def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
         lazy.predict(pd.DataFrame({0: ["CCO"]}))
 
 
+def test_lazymil_predict_reports_cached_descriptors(tmp_path, capsys):
+    class IdentityScaler:
+        def transform(self, x):
+            return x
+
+    lazy = LazyMIL(
+        hopt=False,
+        num_conf=2,
+        num_cpu=1,
+        output_folder=str(tmp_path / "out"),
+        verbose=True,
+    )
+    lazy._trained_models = {
+        "RDKitGEOM|Mock": {
+            "descriptor": "RDKitGEOM",
+            "estimator": MockEstimator(supports_hopt=False),
+            "scaler": IdentityScaler(),
+            "train_col_means": np.array([0.0, 0.0]),
+        }
+    }
+    lazy._cache_descriptor("RDKitGEOM", ["CCO"], [np.array([[0.1, 0.2]])])
+
+    lazy.predict(pd.DataFrame({0: ["CCO"]}))
+
+    assert "Using cached descriptor values for RDKitGEOM" in capsys.readouterr().out
+
+
 def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
     monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
