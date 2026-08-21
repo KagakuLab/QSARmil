@@ -57,6 +57,10 @@ class MockEstimator:
     def predict(self, x: Any) -> np.ndarray:
         return np.full(len(x), self.mean_y)
 
+    def __call__(self) -> "MockEstimator":
+        """Allow the mock instance to act as a factory."""
+        return self
+
 
 @pytest.fixture
 def mock_estimator() -> MockEstimator:
