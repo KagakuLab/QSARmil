@@ -11,22 +11,13 @@ def kid_accuracy(
 ) -> tuple[float, float]:
     """Check whether the model's top-weighted instances match the known key instances.
 
-    For each bag, looks at the ``top_n`` instances with the highest predicted
-    weight and checks whether any of them is a true key instance. Also
-    computes what hit rate you'd expect from picking ``top_n`` instances at
-    random, as a baseline to compare against.
-
     Args:
-        true_key_inst (list[list[int]]): Per-bag binary labels (1 = key
-            instance) marking the ground-truth key instances.
-        predicted_weights (list[list[float]]): Per-bag predicted instance
-            weights, same shape as ``true_key_inst``.
+        true_key_inst (list[list[int]]): Per-bag binary key-instance labels (1 = key instance).
+        predicted_weights (list[list[float]]): Per-bag predicted instance weights, same shape as ``true_key_inst``.
         top_n (int): Number of top-weighted instances to check per bag.
 
     Returns:
-        tuple[float, float]: ``(acc, exp)`` where ``acc`` is the empirical
-        KID accuracy across all bags and ``exp`` is the expected accuracy
-        of a random baseline.
+        tuple[float, float]: ``(acc, exp)``, the empirical KID accuracy and the random-baseline expectation.
     """
 
     assert len(predicted_weights) == len(true_key_inst), "Mismatched input lengths."

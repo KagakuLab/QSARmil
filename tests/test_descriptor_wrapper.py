@@ -52,12 +52,13 @@ def test_transform_catches_exceptions_and_returns_failed_descriptor(capsys):
     assert "boom" in captured.out
 
 
-def test_run_over_list_reports_progress(capsys):
+def test_run_over_list_reports_progress_and_postprocesses(capsys):
     mols = [Chem.MolFromSmiles("CC"), Chem.MolFromSmiles("CCC")]
     bags = [[m] for m in mols]
     wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0]), verbose=True)
-    results = wrapper.run(bags)
+    results, col_stats = wrapper.run(bags)
     assert len(results) == 2
+    assert list(col_stats["keep_mask"]) == [True]
     captured = capsys.readouterr()
     assert "Calculating descriptors:" in captured.out
 
@@ -65,8 +66,20 @@ def test_run_over_list_reports_progress(capsys):
 def test_run_quiet():
     bags = [[Chem.MolFromSmiles("CC")]]
     wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0]), verbose=False)
-    results = wrapper.run(bags)
+    results, _ = wrapper.run(bags)
     assert len(results) == 1
+
+
+def test_run_forwards_verbose_and_col_stats_to_postprocess(capsys):
+    bags = [[Chem.MolFromSmiles("CC")]]
+    wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0, np.nan]), verbose=False)
+    results, col_stats = wrapper.run(bags, verbose=True)
+    assert list(col_stats["keep_mask"]) == [True, False]
+    assert "Removed 1 of 2" in capsys.readouterr().out
+
+    results_2, reused_stats = wrapper.run(bags, verbose=True, col_stats=col_stats)
+    assert reused_stats is col_stats
+    assert capsys.readouterr().out == ""
 
 
 # ---------------------------------------------------------------------------

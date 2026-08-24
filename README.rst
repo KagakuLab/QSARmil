@@ -37,6 +37,21 @@ Use cases
 
 See the examples of ``QSARmil`` application for different tasks in the `tutorial collection <notebooks>`_ .
 
+Command-line interface
+--------------------------
+
+``QSARmil`` also installs a ``qsarmil`` command for training and predicting without writing any Python:
+
+.. code-block:: bash
+
+    qsarmil train --train-path regression.csv --task-type regression --output-dir mcfm
+    qsarmil predict --test-path regression.csv --model-path mcfm/model.pkl --output-file mcfm/test_predictions.csv
+
+``--train-path``/``--test-path`` point to a CSV with a ``smiles`` column and, for training, a ``y`` target column
+(override these names with ``--smiles-column``/``--target-column``). ``--task-type`` is ``regression`` or
+``classification``. Run ``qsarmil train --help`` or ``qsarmil predict --help`` for the full list of options
+(``--num-conf``, ``--hopt``, ``--num-cpu``, ``--val-size``, ``--seed``, ``--quiet``, and more).
+
 Development
 --------------------------
 

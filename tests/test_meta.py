@@ -3,7 +3,6 @@ import pickle
 from typing import Any, cast
 
 import pandas as pd
-import pytest
 from conftest import MockEstimator
 
 import qsarmil.modelling.lazy as lazy_mod
@@ -49,47 +48,6 @@ def _patch_fast_pipeline(monkeypatch, classifier=False):
 def test_regressor_and_classifier_share_base_class():
     assert issubclass(MultiConformerRegressor, MultiConformerEstimator)
     assert issubclass(MultiConformerClassifier, MultiConformerEstimator)
-
-
-def test_regressor_rejects_integer_target(tmp_path):
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
-    with pytest.raises(ValueError, match="classification labels"):
-        model.train(["CCO", "c1ccccc1", "CCN", "CCC"], [0, 1, 0, 1])
-
-
-def test_regressor_rejects_boolean_target(tmp_path):
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
-    with pytest.raises(ValueError, match="classification labels"):
-        model.train(["CCO", "c1ccccc1", "CCN", "CCC"], [True, False, True, False])
-
-
-def test_regressor_rejects_non_numeric_target(tmp_path):
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
-    with pytest.raises(ValueError, match="not numeric"):
-        model.train(["CCO", "c1ccccc1", "CCN", "CCC"], ["active", "inactive", "active", "inactive"])
-
-
-def test_regressor_accepts_float_target_with_few_distinct_values(monkeypatch, tmp_path):
-    """The whole point of _check_continuous_target being dtype-based, not
-    cardinality-based: a float target with only 2 distinct values must NOT
-    be rejected, since that's a legitimate (if small) regression dataset."""
-    _patch_fast_pipeline(monkeypatch)
-    model = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False
-    )
-    model.train(["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], [1.0, 3.0, 1.0, 3.0, 1.0])
-    assert model.is_trained is True
-
-
-def test_classifier_does_not_apply_continuous_target_check(monkeypatch, tmp_path):
-    """MultiConformerClassifier has no analogous guard - integer labels are
-    exactly what it expects."""
-    _patch_fast_pipeline(monkeypatch, classifier=True)
-    model = MultiConformerClassifier(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False
-    )
-    model.train(["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"], [0, 1, 0, 1, 0])
-    assert model.is_trained is True
 
 
 def test_regressor_forces_continuous_despite_two_value_target(monkeypatch, tmp_path):

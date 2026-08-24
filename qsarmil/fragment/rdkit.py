@@ -21,8 +21,7 @@ class RDKitFragmentGenerator:
         self.verbose = verbose
 
     def _generate_fragments(self, mol: MolOrFailed) -> list[Mol] | FailedMolecule | FailedConformer:
-        """Generate fragments for a single molecule using BRICS
-        decomposition."""
+        """Generate fragments for a single molecule using BRICS decomposition."""
 
         if isinstance(mol, (FailedMolecule, FailedConformer)):
             print("Failed molecule")

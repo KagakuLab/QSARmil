@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-import numpy as np
 import pandas as pd
 import psutil
 from qsarcons.consensus import GeneticSearch
@@ -21,19 +20,7 @@ RDLogger.DisableLog("rdApp.*")
 
 
 class MultiConformerEstimator:
-    """Shared implementation behind :class:`MultiConformerRegressor` and
-    :class:`MultiConformerClassifier`.
-
-    Wraps :class:`~qsarmil.modelling.lazy.LazyMIL` to train every built-in
-    descriptor/estimator combination, then picks the best-performing
-    consensus of models on the validation split via a genetic search
-    (:class:`qsarcons.consensus.GeneticSearch`).
-
-    Not meant to be instantiated directly - use one of the two subclasses
-    so the task type is explicit rather than auto-detected from ``y``
-    (auto-detection can misfire, e.g. a 2-value numeric target looks
-    identical to a binary-classification target).
-    """
+    """Shared LazyMIL + consensus-search pipeline behind MultiConformerRegressor/MultiConformerClassifier."""
 
     _task: str | None = None
 
@@ -53,17 +40,10 @@ class MultiConformerEstimator:
             num_conf (int): Number of conformers to generate per molecule.
             hopt (bool): Whether to hyperparameter-tune each estimator.
             num_cpu (int): Number of CPU threads to use for conformer generation.
-            output_folder (str, optional): Directory for LazyMIL's
-                intermediate prediction CSVs. If omitted, a fresh temporary
-                directory is created.
+            output_folder (str, optional): Directory for LazyMIL's CSVs; a fresh temp dir is created if omitted.
             verbose (bool): Whether to print progress from the underlying steps.
-            seed (int): Random seed used for the train/val split and for
-                everything :class:`~qsarmil.modelling.lazy.LazyMIL` seeds internally
-                (conformer embedding, molecule validation, hyperparameter
-                search). Does **not** cover the final genetic consensus
-                search - see the note in :meth:`train`.
-            val_size (float): Fraction of the training data held out as a
-                random validation split (used for consensus selection).
+            seed (int): Random seed for the train/val split and everything LazyMIL seeds internally.
+            val_size (float): Fraction of the training data held out as a random validation split.
         """
         super().__init__()
 
@@ -89,8 +69,7 @@ class MultiConformerEstimator:
 
         Args:
             smiles (Sequence[str]): Training SMILES strings.
-            y (Sequence[Any]): Target property value for each SMILES, same
-                length and order as ``smiles``.
+            y (Sequence[Any]): Target property value for each SMILES, same length/order as ``smiles``.
 
         Returns:
             MultiConformerEstimator: This instance, now containing trained state.
@@ -137,12 +116,10 @@ class MultiConformerEstimator:
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
-            save (bool): Whether to also write LazyMIL's per-model
-                predictions to ``test.csv`` in ``output_folder``.
+            save (bool): Whether to also write LazyMIL's per-model predictions to ``test.csv``.
 
         Returns:
-            list: Predicted property value for each input SMILES, in the
-            same order as ``smiles``.
+            list: Predicted property value for each input SMILES, same order as ``smiles``.
         """
 
         if not self.is_trained:
@@ -229,79 +206,14 @@ class MultiConformerEstimator:
         return model
 
 
-def _check_continuous_target(y: Sequence[Any]) -> None:
-    """Raise if ``y`` looks like classification labels rather than a
-    continuous property.
-
-    This can't be perfectly reliable (there's no way to tell "0.0 and 1.0
-    happen to be the only two potency values in this dataset" from "0 and 1
-    are class labels" without more context), so the check is deliberately
-    narrow: it only flags targets whose dtype is boolean or integer, or
-    that aren't numeric at all. A float target is always accepted, even
-    with only a couple of distinct values - that's exactly the case
-    :class:`MultiConformerRegressor` exists to support (see
-    :class:`MultiConformerEstimator`'s docstring).
-
-    Args:
-        y (Sequence[Any]): Target values to check.
-
-    Raises:
-        ValueError: If ``y`` is non-numeric, boolean, or integer-dtyped.
-    """
-
-    y_arr = np.asarray(list(y))
-
-    if y_arr.dtype == object or np.issubdtype(y_arr.dtype, np.str_):
-        raise ValueError(
-            "MultiConformerRegressor requires a continuous numeric target, but the values "
-            f"provided are not numeric (dtype={y_arr.dtype}). If these are class labels, use "
-            "MultiConformerClassifier instead."
-        )
-
-    if np.issubdtype(y_arr.dtype, np.bool_) or np.issubdtype(y_arr.dtype, np.integer):
-        raise ValueError(
-            "MultiConformerRegressor received a boolean/integer-only target, which looks like "
-            "classification labels rather than a continuous property. If this is intentional "
-            "(e.g. count data), convert y to float first; otherwise use MultiConformerClassifier."
-        )
-
-
 class MultiConformerRegressor(MultiConformerEstimator):
-    """MultiConformerEstimator pipeline for continuous (regression) targets.
-
-    See :class:`MultiConformerEstimator` for the full train/predict/save/load
-    API. This subclass fixes the task to regression, so ``y`` is never
-    passed through ``sklearn``'s auto-detection - a target with only two
-    distinct numeric values (e.g. ``[1.0, 3.0]``) would otherwise be
-    misdetected as binary classification.
-
-    :meth:`train` additionally rejects targets that are clearly labels
-    rather than a continuous property (booleans, integers, or non-numeric
-    values) - see :func:`_check_continuous_target`.
-    """
+    """MultiConformerEstimator pipeline for continuous (regression) targets."""
 
     _task = "continuous"
 
-    def train(self, smiles: Sequence[str], y: Sequence[Any]) -> MultiConformerEstimator:
-        """Train, after checking ``y`` doesn't look like classification labels.
-
-        See :meth:`MultiConformerEstimator.train` for the full behavior.
-
-        Raises:
-            ValueError: If ``y`` looks like classification labels rather
-                than a continuous property (see :func:`_check_continuous_target`).
-        """
-
-        _check_continuous_target(y)
-        return super().train(smiles, y)
-
 
 class MultiConformerClassifier(MultiConformerEstimator):
-    """MultiConformerEstimator pipeline for binary classification targets.
-
-    See :class:`MultiConformerEstimator` for the full train/predict/save/load
-    API. This subclass fixes the task to binary classification.
-    """
+    """MultiConformerEstimator pipeline for binary classification targets."""
 
     _task = "binary"
 

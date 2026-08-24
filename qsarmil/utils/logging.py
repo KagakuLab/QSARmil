@@ -14,93 +14,48 @@ RDLogger.DisableLog("rdApp.*")
 
 
 class FailedMolecule:
-    """Represents a molecule for which SMILES parsing or initialization failed.
-
-    Attributes:
-        smiles (str): The SMILES string that failed to parse.
-    """
+    """Represents a molecule for which SMILES parsing or initialization failed."""
 
     def __init__(self, smiles: str) -> None:
-        """Initialize a FailedMolecule with the problematic SMILES.
-
-        Args:
-            smiles (str): SMILES string that failed parsing.
-        """
+        """Store the SMILES string that failed to parse."""
         super().__init__()
         self.smiles = smiles
 
     def __str__(self) -> str:
-        """Return a human-readable error message.
-
-        Returns:
-            str: Error message describing the parsing failure.
-        """
+        """Return a human-readable error message."""
         return f"{self.smiles} -> SMILES parsing failed"
 
 
 class FailedConformer:
-    """Represents a molecule for which conformer generation failed.
-
-    Attributes:
-        mol (rdkit.Chem.Mol | None): Molecule that failed conformer
-            generation. Can be ``None`` when the input molecule itself was
-            already invalid (e.g. an unparseable SMILES upstream).
-    """
+    """Represents a molecule for which conformer generation failed."""
 
     def __init__(self, mol: Mol | None) -> None:
-        """Initialize a FailedConformer with the failed molecule.
-
-        Args:
-            mol (rdkit.Chem.Mol | None): Molecule that failed conformer
-                generation, or ``None`` if the input was already invalid.
-        """
+        """Store the molecule that failed conformer generation, or ``None`` if the input was already invalid."""
         super().__init__()
         self.mol = mol
 
     def __str__(self) -> str:
-        """Return a human-readable error message.
-
-        Returns:
-            str: Error message describing the conformer generation failure.
-        """
+        """Return a human-readable error message."""
         smi = Chem.MolToSmiles(self.mol)
         return f"{smi} -> conformer generation failed"
 
 
 class FailedDescriptor:
-    """Represents a molecule (or conformer/fragment ensemble) for which
-    descriptor calculation failed.
-
-    Attributes:
-        mol: The molecule or ensemble that failed descriptor calculation.
-    """
+    """Represents a molecule or bag of conformers for which descriptor calculation failed."""
 
     def __init__(self, mol: Any) -> None:
-        """Initialize a FailedDescriptor with the failed input.
-
-        Args:
-            mol: The molecule or ensemble that failed descriptor calculation.
-        """
+        """Store the molecule or bag that failed descriptor calculation."""
         super().__init__()
         self.mol = mol
 
     def __str__(self) -> str:
-        """Return a human-readable error message.
-
-        Returns:
-            str: Error message describing the descriptor calculation failure.
-        """
+        """Return a human-readable error message."""
         smi = Chem.MolToSmiles(self.mol)
         return f"{smi} -> descriptor calculation failed"
 
 
 def print_step_header(step: int, title: str, bar_width: int = 26) -> None:
     """Print a ``+---+ / Step-N. Title / +---+`` banner for a pipeline stage.
-
-    Used to give :meth:`~qsarmil.modelling.lazy.LazyMIL.run` and
-    :meth:`~qsarmil.modelling.meta.MultiConformerRegressor.train`/
-    :meth:`~qsarmil.modelling.meta.MultiConformerClassifier.train`'s verbose output a
-    consistent, easy-to-scan structure across their shared numbered steps.
 
     Args:
         step (int): Step number to display (e.g. ``1``).
@@ -115,19 +70,13 @@ def print_step_header(step: int, title: str, bar_width: int = 26) -> None:
 
 
 class OutputSuppressor:
-    """Context manager that silences all output while it's open.
-
-    Suppresses Python `print`/logging as well as C/C++ libraries writing
-    straight to stdout/stderr (e.g. CatBoost, XGBoost). Thread-safe and
-    nestable: nested or concurrent uses share one counter, so output only
-    comes back once every ``with`` block has exited.
-    """
+    """Context manager that silences all stdout/stderr/logging output while it's open, nestably and thread-safely."""
 
     _lock = threading.Lock()
     _active = 0
 
     def __enter__(self) -> None:
-        """Redirect stdout, stderr and logging to /dev/null for this thread."""
+        """Redirect stdout/stderr and logging to /dev/null for this thread."""
         with OutputSuppressor._lock:
             if OutputSuppressor._active == 0:
                 # Save original file descriptors

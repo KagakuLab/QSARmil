@@ -41,7 +41,9 @@ def model_factory(module_name: str, class_name: str, /, *args: Any, **kwargs: An
 
     return build
 
-def descriptor_factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Callable[[], DescriptorWrapper]:
+def descriptor_factory(
+    module_name: str, class_name: str, /, *args: Any, **kwargs: Any
+) -> Callable[[], DescriptorWrapper]:
     def build() -> DescriptorWrapper:
         cls = getattr(import_module(module_name), class_name)
         return DescriptorWrapper(cls(*args, **kwargs))
@@ -77,10 +79,16 @@ def _REGRESSORS() -> dict[str, Any]:
         ),
         # mil networks
         "MeanBagNetworkRegressor": model_factory("milearn.network.regressor", "BagNetworkRegressor", pool="mean"),
-        "MeanInstanceNetworkRegressor": model_factory("milearn.network.regressor", "InstanceNetworkRegressor", pool="mean"),
-        "AdditiveAttentionNetworkRegressor": model_factory("milearn.network.regressor", "AdditiveAttentionNetworkRegressor"),
+        "MeanInstanceNetworkRegressor": model_factory(
+            "milearn.network.regressor", "InstanceNetworkRegressor", pool="mean"
+        ),
+        "AdditiveAttentionNetworkRegressor": model_factory(
+            "milearn.network.regressor", "AdditiveAttentionNetworkRegressor"
+        ),
         "SelfAttentionNetworkRegressor": model_factory("milearn.network.regressor", "SelfAttentionNetworkRegressor"),
-        "HopfieldAttentionNetworkRegressor": model_factory("milearn.network.regressor", "HopfieldAttentionNetworkRegressor"),
+        "HopfieldAttentionNetworkRegressor": model_factory(
+            "milearn.network.regressor", "HopfieldAttentionNetworkRegressor"
+        ),
         "DynamicPoolingNetworkRegressor": model_factory("milearn.network.regressor", "DynamicPoolingNetworkRegressor"),
     }
 
@@ -96,11 +104,21 @@ def _CLASSIFIERS() -> dict[str, Any]:
         ),
         # mil networks
         "MeanBagNetworkClassifier": model_factory("milearn.network.classifier", "BagNetworkClassifier", pool="mean"),
-        "MeanInstanceNetworkClassifier": model_factory("milearn.network.classifier", "InstanceNetworkClassifier", pool="mean"),
-        "AdditiveAttentionNetworkClassifier": model_factory("milearn.network.classifier", "AdditiveAttentionNetworkClassifier"),
-        "SelfAttentionNetworkClassifier": model_factory("milearn.network.classifier", "SelfAttentionNetworkClassifier"),
-        "HopfieldAttentionNetworkClassifier": model_factory("milearn.network.classifier", "HopfieldAttentionNetworkClassifier"),
-        "DynamicPoolingNetworkClassifier": model_factory("milearn.network.classifier", "DynamicPoolingNetworkClassifier"),
+        "MeanInstanceNetworkClassifier": model_factory(
+            "milearn.network.classifier", "InstanceNetworkClassifier", pool="mean"
+        ),
+        "AdditiveAttentionNetworkClassifier": model_factory(
+            "milearn.network.classifier", "AdditiveAttentionNetworkClassifier"
+        ),
+        "SelfAttentionNetworkClassifier": model_factory(
+            "milearn.network.classifier", "SelfAttentionNetworkClassifier"
+        ),
+        "HopfieldAttentionNetworkClassifier": model_factory(
+            "milearn.network.classifier", "HopfieldAttentionNetworkClassifier"
+        ),
+        "DynamicPoolingNetworkClassifier": model_factory(
+            "milearn.network.classifier", "DynamicPoolingNetworkClassifier"
+        ),
     }
 
 # Lazy estimator mappings. The dictionaries are built eagerly, but each value
@@ -128,17 +146,7 @@ DEFAULT_PARAM_GRID = {
 def gen_conformers(
     smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = 1, verbose: bool = False, seed: int = 42
 ) -> list[list[Any] | FailedMolecule | FailedConformer]:
-    """Generate conformers for a list of SMILES strings using
-    RDKitConformerGenerator.
-
-    Unparseable SMILES become :class:`~qsarmil.utils.logging.FailedMolecule`
-    and pass through untouched; SMILES that parse but fail 3D embedding
-    become :class:`~qsarmil.utils.logging.FailedConformer`. Neither raises -
-    callers that need clean data should filter these sentinels out
-    themselves (see :func:`report_smiles_parsing`/:func:`report_conformer_generation`).
-    Successful molecules come back as a plain ``list`` of single-conformer
-    ``Mol`` objects (a "bag" of conformers), not a special wrapper type.
-    """
+    """Generate conformers per SMILES; unparseable/failed-embedding molecules become Failed* sentinels, not raises."""
     mol_list = []
     for smi in smi_list:
         mol = Chem.MolFromSmiles(smi)
@@ -154,9 +162,7 @@ def report_smiles_parsing(smiles: list[str], confs: list[Any], verbose: bool = T
 
     Args:
         smiles (list[str]): SMILES strings, in their original order.
-        confs (list[Any]): Per-SMILES :func:`gen_conformers` output (same
-            order), used only to tell which entries are
-            :class:`~qsarmil.utils.logging.FailedMolecule`.
+        confs (list[Any]): Per-SMILES :func:`gen_conformers` output, same order.
         verbose (bool): Whether to print the report.
 
     Returns:
@@ -185,10 +191,8 @@ def report_conformer_generation(
 
     Args:
         smiles (list[str]): SMILES strings, in their original order.
-        confs (list[Any]): Per-SMILES :func:`gen_conformers` output (same
-            order).
-        already_failed (set[int]): Indices already dropped in Step 1
-            (SMILES parsing) - excluded from the "considered" count here.
+        confs (list[Any]): Per-SMILES :func:`gen_conformers` output, same order.
+        already_failed (set[int]): Indices already dropped in Step 1, excluded from the "considered" count.
         verbose (bool): Whether to print the report.
 
     Returns:
@@ -204,7 +208,8 @@ def report_conformer_generation(
         print(f"> For {len(ok_idx)} of {n_considered} molecules, conformers were generated successfully.")
         if ok_idx:
             counts = [len(confs[i]) for i in ok_idx]
-            print(f"> Average num conf: {np.mean(counts):.1f} | min num conf: {min(counts)} | max num conf: {max(counts)}")
+            avg, mn, mx = np.mean(counts), min(counts), max(counts)
+            print(f"> Average num conf: {avg:.1f} | min num conf: {mn} | max num conf: {mx}")
         if failed_idx:
             print(
                 f"> For {len(failed_idx)} molecules, conformer generation failed, "
@@ -225,12 +230,10 @@ def target_fallback(y: Iterable[Any], task_type: str) -> Any:
 
     Args:
         y (Iterable[Any]): Training targets.
-        task_type (str): ``"continuous"`` or ``"binary"``, as returned by
-            ``sklearn.utils.multiclass.type_of_target``.
+        task_type (str): ``"continuous"`` or ``"binary"``.
 
     Returns:
-        Any: The training target mean for ``"continuous"`` tasks, or the
-        most frequent training class for ``"binary"`` tasks.
+        Any: The training target mean (continuous) or most frequent class (binary).
     """
 
     y_arr = np.asarray(list(y))
@@ -241,13 +244,7 @@ def target_fallback(y: Iterable[Any], task_type: str) -> Any:
 
 
 def _print_progress_item(index: int, total: int, label: str, elapsed_min: float, mem_gb: float) -> None:
-    """Print a ``[i/n] label`` line followed by an indented timing/memory line.
-
-    The second line's ``>`` is hung under where ``label`` starts, e.g.::
-
-        [1/72] RDKitGEOM|MeanInstanceWrapperMLPNetworkRegressor
-               > Finished in 7.88 min | Memory usage: 1.255 G
-    """
+    """Print a ``[i/n] label`` line followed by an indented, hanging-aligned timing/memory line."""
 
     prefix = f"[{index}/{total}] "
     print(f"{prefix}{label}")
@@ -260,29 +257,9 @@ def calc_descriptors(
     verbose: bool = False,
     col_stats: dict[str, np.ndarray] | None = None,
 ) -> tuple[list[np.ndarray], dict[str, np.ndarray]]:
-    """Compute and clean descriptor bags for a list of per-molecule conformer bags.
-
-    Args:
-        conf_list (list[list]): Per-molecule bags of single-conformer ``Mol``
-            objects.
-        calculator (DescriptorWrapper): Descriptor calculator to apply.
-        verbose (bool): Whether to print which descriptor columns get
-            dropped and why - see :meth:`DescriptorWrapper.postprocess`.
-        col_stats (dict, optional): Column stats (from a prior call,
-            typically on the training split) to reuse instead of
-            recomputing from this call's own output - see
-            :meth:`~qsarmil.descriptor.wrapper.DescriptorWrapper.postprocess`.
-
-    Returns:
-        tuple[list[np.ndarray], dict]: ``(cleaned_bags, col_stats)``. Assumes
-        descriptor calculation succeeded for every molecule; a
-        :class:`~qsarmil.utils.logging.FailedDescriptor` in ``calculator``'s
-        output is not handled here and will raise inside ``postprocess`` instead.
-    """
+    """Compute and clean descriptor bags for a list of per-molecule conformer bags."""
     calculator.verbose = False  # the low-level per-conformer ticker is redundant with LazyMIL's own step progress
-    x: list[Any] = calculator.run(conf_list)
-    x, col_stats = calculator.postprocess(x, verbose=verbose, col_stats=col_stats)
-    return x, col_stats
+    return calculator.run(conf_list, verbose=verbose, col_stats=col_stats)
 
 def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Min-max scale descriptor bags, fitting the scaler on the train set only.
@@ -310,31 +287,19 @@ def build_model(
     hopt: bool = True,
     seed: int = 42,
 ) -> tuple[list[Any], list[Any], Any, BagMinMaxScaler]:
-    """Fit one estimator and return its predictions on train/val.
-
-    Tunes hyperparameters (if requested and supported) and fits on the
-    train split to produce train/val predictions, then refits the same
-    estimator on train+val combined - this final refit is what gets
-    persisted and reused by :meth:`LazyMIL.predict` for inference on new,
-    unlabeled data.
+    """Fit one estimator and refit on train+val, returning predictions and the artifacts to persist.
 
     Args:
         x_train (list[np.ndarray]): Training descriptor bags.
         x_val (list[np.ndarray]): Validation descriptor bags.
         y_train (array-like): Training targets.
         y_val (array-like): Validation targets.
-        estimator_instance: A MIL estimator implementing ``fit``/``predict``,
-            and optionally ``hopt`` for hyperparameter search.
-        hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting,
-            if the estimator supports it.
-        seed (int): Random seed passed to the estimator's hyperparameter
-            search, overriding ``DEFAULT_PARAM_GRID``'s own default.
+        estimator_instance: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
+        hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting, if supported.
+        seed (int): Random seed passed to the estimator's hyperparameter search.
 
     Returns:
-        tuple: ``(pred_train, pred_val, fitted_estimator, fitted_scaler)``.
-        Predictions are lists of the same length as the corresponding input
-        bags. ``fitted_estimator``/``fitted_scaler`` come from the final
-        train+val refit.
+        tuple: ``(pred_train, pred_val, fitted_estimator, fitted_scaler)`` from the final train+val refit.
     """
 
     # 1. Scale train/val descriptors
@@ -362,17 +327,7 @@ def build_model(
 
 
 class LazyMIL:
-    """Train every combination of built-in descriptor and MIL estimator on one dataset.
-
-    For each of the 9 built-in 3D descriptor types crossed with every
-    regressor or classifier in :data:`REGRESSORS`/:data:`CLASSIFIERS` (task
-    type is inferred from the training targets unless :attr:`task` is set),
-    generates conformers, computes descriptors, fits the estimator, and
-    writes predictions to ``train.csv``/``val.csv`` under ``output_folder``.
-    Use :meth:`predict` for inference on new, unlabeled data - there's no
-    separate "test set" concept here, since a labeled benchmark hold-out and
-    genuine new-data inference are different things.
-    """
+    """Train every built-in descriptor/estimator combination on one dataset; use predict() for new data."""
 
     def __init__(
         self,
@@ -385,27 +340,17 @@ class LazyMIL:
         val_size: float = 0.2,
         task: str | None = None,
     ) -> None:
-        """Set up the run and (re)create the output folder.
+        """Store settings and (re)create the output folder.
 
         Args:
-            hopt (bool): Whether to hyperparameter-tune each estimator before
-                fitting, for estimators that support it.
+            hopt (bool): Whether to hyperparameter-tune each estimator before fitting, if supported.
             num_conf (int): Number of conformers to generate per molecule.
             num_cpu (int): Number of CPU threads to use for conformer generation.
-            output_folder (str, optional): Directory the per-model prediction
-                CSVs are written to. If omitted, a fresh temporary directory
-                is created. If it already exists, it's wiped and recreated.
+            output_folder (str, optional): Output directory; a fresh temp dir is created and wiped if omitted/exists.
             verbose (bool): Whether to print per-model progress and memory usage.
-            seed (int): Random seed used for conformer embedding, molecule
-                validation, the internal train/validation split, and
-                hyperparameter search.
-            val_size (float): Fraction of the data held out as a random
-                validation split inside :meth:`run`.
-            task (str, optional): ``"continuous"`` or ``"binary"`` to force
-                regression or classification, skipping auto-detection via
-                ``sklearn.utils.multiclass.type_of_target`` (which can
-                misclassify e.g. a 2-value numeric target as ``"binary"``).
-                If ``None`` (default), the task type is inferred from ``y``.
+            seed (int): Random seed for embedding, validation, the train/val split, and hyperparameter search.
+            val_size (float): Fraction of the data held out as a random validation split inside :meth:`run`.
+            task (str, optional): ``"continuous"`` or ``"binary"`` to force the task, skipping auto-detection.
         """
         self.hopt = hopt
         self.num_conf = num_conf
@@ -440,23 +385,18 @@ class LazyMIL:
         return bool(self._trained_models)
 
     def _ensure_estimator_predict_ready(self, estimator_instance: Any) -> None:
-        """Rebuild missing runtime trainer for milearn estimators after unpickling.
-    
-        milearn's pickle protocol intentionally drops ``_trainer``. In inference-only
-        sessions (load -> predict), this helper recreates a prediction-capable
-        trainer so ``estimator.predict`` can run without retraining.
-        """
-    
+        """Rebuild a milearn estimator's runtime trainer after unpickling, so predict() works without retraining."""
+
         module_name = estimator_instance.__class__.__module__
         if not module_name.startswith("milearn."):
             return
-    
+
         if not hasattr(estimator_instance, "_trainer"):
             return
-    
+
         if estimator_instance._trainer is not None:
             return
-    
+
         import pytorch_lightning as pl
 
         hparams = estimator_instance.hparams
@@ -491,16 +431,14 @@ class LazyMIL:
     def _get_cached_descriptors(
         self, desc_name: str, smi_list: list[str]
     ) -> tuple[list[np.ndarray | None], list[str]]:
-        """Retrieve descriptors from cache for multiple SMILES, returning found descriptors and uncached SMILES.
+        """Retrieve cached descriptors for the given SMILES, returning found vectors and the still-uncached ones.
 
         Args:
-            desc_name: Name of the descriptor type
-            smi_list: List of SMILES strings to look up
+            desc_name: Name of the descriptor type.
+            smi_list: SMILES strings to look up.
 
         Returns:
-            A tuple of:
-            - List of descriptors (same order as smi_list, None for missing)
-            - List of SMILES strings that were not found in cache
+            tuple: ``(found_vectors, uncached_smiles)``.
         """
         smi_mask = self._descriptor_cache["SMILES"].isin(smi_list)
         mask = (self._descriptor_cache["descriptor_name"] == desc_name) & (
@@ -523,21 +461,12 @@ class LazyMIL:
     def run(self, smiles: Sequence[str], y: Sequence[Any]) -> None:
         """Train every descriptor/estimator combination and write predictions to CSV.
 
-        Generates conformers for the whole dataset once, drops molecules
-        that can't be processed (unparseable SMILES or failed 3D embedding,
-        reported as they're dropped), then splits what's left into a random
-        train/validation split (:attr:`val_size`, seeded by :attr:`seed`).
-
         Args:
             smiles (Sequence[str]): SMILES strings.
-            y (Sequence[Any]): Target property value for each SMILES, same
-                length and order as ``smiles``.
+            y (Sequence[Any]): Target property value for each SMILES, same length and order as ``smiles``.
 
         Returns:
-            None. Results are written to ``train.csv`` and ``val.csv`` in
-            ``self.output_folder``, with one prediction column per
-            descriptor/estimator combination. For inference on new,
-            unlabeled data, use :meth:`predict`.
+            None. Writes ``train.csv``/``val.csv`` to ``self.output_folder``; use :meth:`predict` for new data.
         """
 
         # Reset previous fitted artifacts for a fresh training run.
@@ -646,24 +575,14 @@ class LazyMIL:
                     _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
 
     def predict(self, smiles: Sequence[str], save: bool = False) -> pd.DataFrame:
-        """Run inference from persisted fitted models without retraining.
-
-        Generates conformers/descriptors only for SMILES not already in the
-        descriptor cache, scales with the stored scalers, and calls
-        ``estimator.predict``. Molecules that can't be turned into
-        conformers (unparseable SMILES or failed 3D embedding) are not
-        dropped - instead they're predicted using :attr:`_train_fallback`
-        (the training target mean, or most frequent training class for
-        classifiers), and reported by row index and SMILES.
+        """Run inference from persisted fitted models, imputing molecules that fail with :attr:`_train_fallback`.
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
-            save (bool): Whether to also write the result to ``test.csv``
-                in ``self.output_folder``.
+            save (bool): Whether to also write the result to ``test.csv`` in ``self.output_folder``.
 
         Returns:
-            pd.DataFrame: A ``SMILES`` column plus one prediction column
-            per trained descriptor/estimator combination.
+            pd.DataFrame: A ``SMILES`` column plus one prediction column per trained descriptor/estimator combo.
         """
 
         if not self.is_trained:

@@ -14,24 +14,10 @@ _EXTREME_VALUE_THRESHOLD = 1e25
 
 
 class DescriptorWrapper:
-    """Wrapper to compute molecular descriptors for multiple conformers in
-    parallel.
-
-    Converts a molecule's bag of single-conformer ``Mol`` objects into a
-    bag of descriptor vectors, one per conformer, with optional
-    parallelization and progress tracking. Works the same regardless of
-    whether ``transformer`` is an RDKit-based descriptor
-    (:class:`~qsarmil.descriptor.rdkit.RDKitDescriptor3D` and subclasses)
-    or an external one (e.g. a MolFeat calculator) - see :meth:`postprocess`.
-
-    Args:
-        transformer (callable): Descriptor function or object that accepts a molecule
-            and optional conformer ID, returning a descriptor vector.
-        verbose (bool): Whether to display a progress bar.
-    """
+    """Compute molecular descriptors for a bag of conformers, for both RDKit-based and external transformers."""
 
     def __init__(self, transformer: Callable[..., np.ndarray], verbose: bool = True) -> None:
-        """Initialize the descriptor wrapper.
+        """Store the descriptor transformer and verbosity setting.
 
         Args:
             transformer (callable): Descriptor function or object.
@@ -42,15 +28,7 @@ class DescriptorWrapper:
         self.verbose = verbose
 
     def __call__(self, mols: list[Mol], *args: Any, **kwargs: Any) -> np.ndarray | FailedDescriptor:
-        """Compute the descriptor bag for a single molecule.
-
-        Args:
-            mols (list[Mol]): A bag of single-conformer molecules to compute
-                descriptors for (one row of output per conformer).
-
-        Returns:
-            np.ndarray: One descriptor vector per conformer in the bag.
-        """
+        """Compute the raw descriptor bag (one vector per conformer) for a single molecule's bag of conformers."""
         return self._transform(mols)
 
     def _bag_to_descriptors(self, mols: list[Mol]) -> np.ndarray:
@@ -68,8 +46,10 @@ class DescriptorWrapper:
             x = FailedDescriptor(mols)
         return x
 
-    def run(self, list_of_bags: Sequence[list[Mol]]) -> list[np.ndarray | FailedDescriptor]:
-        """Compute descriptors for a list of molecules' conformer bags."""
+    def run(
+        self, list_of_bags: Sequence[list[Mol]], verbose: bool = False, col_stats: dict[str, np.ndarray] | None = None
+    ) -> tuple[list[np.ndarray], dict[str, np.ndarray]]:
+        """Compute descriptors for a list of bags, then clean the result via postprocess()."""
 
         total = len(list_of_bags)
         results = []
@@ -81,7 +61,7 @@ class DescriptorWrapper:
         if self.verbose:
             print(f"Calculating descriptors: {total}/{total}")
 
-        return results
+        return self.postprocess(results, verbose=verbose, col_stats=col_stats)
 
     def postprocess(
         self,
@@ -89,37 +69,17 @@ class DescriptorWrapper:
         verbose: bool = False,
         col_stats: dict[str, np.ndarray] | None = None,
     ) -> tuple[list[np.ndarray], dict[str, np.ndarray]]:
-        """Drop unreliable descriptor columns from a list of per-molecule bags.
-
-        Non-finite values (NaN, and values whose magnitude reaches
-        :data:`_EXTREME_VALUE_THRESHOLD`) are treated as missing. Any column
-        that's missing for even a single conformer, in any molecule, is
-        dropped entirely - we don't impute a column mean here, since in
-        practice a partially-missing 3D descriptor column has always meant
-        the column isn't reliable for this dataset, not that it's worth
-        salvaging.
-
-        Works the same regardless of what produced ``bags`` (an RDKit
-        descriptor, a MolFeat calculator, or anything else `run` was pointed
-        at), since it operates purely on the resulting numeric matrix.
+        """Drop any descriptor column that's NaN/extreme for at least one conformer, in any molecule.
 
         Args:
-            bags (list[np.ndarray]): Per-molecule descriptor matrices
-                (conformers x raw features), one per molecule.
-            verbose (bool): Whether to print which columns were dropped and
-                why. Only takes effect while computing stats fresh
-                (``col_stats=None``) - when reusing stats from a prior call,
-                no new decision is being made, so nothing is printed.
-            col_stats (dict, optional): Stats returned by an earlier call -
-                pass the training split's stats here when cleaning
-                validation/test/inference data, so every split ends up with
-                the exact same columns instead of each one making its own
-                (potentially different) decision.
+            bags (list[np.ndarray]): Per-molecule descriptor matrices (conformers x raw features).
+            verbose (bool): Whether to print which columns were dropped and why (only when computing stats fresh).
+            col_stats (dict, optional): Stats from a prior call, e.g. the training split's, to reuse instead of
+                recomputing.
 
         Returns:
-            tuple[list[np.ndarray], dict]: ``(cleaned_bags, col_stats)``,
-            where ``col_stats`` is ``{"keep_mask": np.ndarray}`` - reuse it
-            via the ``col_stats`` argument to clean another split consistently.
+            tuple[list[np.ndarray], dict]: ``(cleaned_bags, col_stats)``, where ``col_stats`` is
+            ``{"keep_mask": np.ndarray}``.
         """
 
         stacked = np.vstack(bags).astype(float)

@@ -23,27 +23,17 @@ def visualize_conformers_grid(
 ) -> None:
     """Render a molecule's conformers as a grid of 3D viewers in a notebook.
 
-    Highlights the true key conformers and the top predicted ones by color,
-    so you can eyeball how well predicted weights line up with the known key
-    instances. Displays the grid directly via IPython; nothing is returned.
-
     Args:
-        mol (rdkit.Chem.Mol): Molecule with one embedded conformer per entry
-            in ``weights``.
-        weights (Sequence[float]): Predicted weight for each conformer, in
-            conformer-index order.
-        key_conformers (Iterable[int]): Indices of the true key conformers,
-            highlighted in red.
-        top_n (int): Number of highest-weighted conformers to highlight in
-            blue as predictions.
+        mol (rdkit.Chem.Mol): Molecule with one embedded conformer per entry in ``weights``.
+        weights (Sequence[float]): Predicted weight for each conformer, in conformer-index order.
+        key_conformers (Iterable[int]): Indices of the true key conformers, highlighted in red.
+        top_n (int): Number of highest-weighted conformers to highlight in blue as predictions.
         style (str): py3Dmol rendering style (e.g. ``"stick"``).
         n_cols (int): Number of viewers per grid row.
         width (int): Width in pixels of each viewer.
         height (int): Height in pixels of each viewer.
-        show_all (bool): If True, show every conformer instead of only the
-            key and top-predicted ones.
-        sort_by_weight (bool): If True, order the shown conformers by
-            descending predicted weight.
+        show_all (bool): If True, show every conformer instead of only the key and top-predicted ones.
+        sort_by_weight (bool): If True, order the shown conformers by descending predicted weight.
     """
 
     num_confs = mol.GetNumConformers()

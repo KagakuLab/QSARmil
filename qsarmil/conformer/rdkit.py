@@ -16,13 +16,7 @@ MolOrFailed = Union[Mol, None, FailedMolecule, FailedConformer]
 
 
 def split_into_conformers(mol: Mol) -> list[Mol]:
-    """Split a multi-conformer molecule into single-conformer copies.
-
-    Useful on its own too: if you already have RDKit ``Mol`` objects with
-    embedded conformers (e.g. from a custom conformer generator, or loaded
-    from disk), this turns one into the "bag" shape the rest of QSARmil
-    expects - a plain ``list[Mol]``, one single-conformer copy per embedded
-    conformer.
+    """Split a multi-conformer molecule into a plain list of single-conformer copies.
 
     Args:
         mol (rdkit.Chem.Mol): Molecule with one or more embedded conformers.
@@ -41,11 +35,7 @@ def split_into_conformers(mol: Mol) -> list[Mol]:
 
 
 class RDKitConformerGenerator:
-    """Generate and optimize molecular conformers with optional filtering.
-
-    Uses RDKit's ETKDG method for 3D embedding, followed by UFF geometry
-    optimization and optional energy-based filtering.
-    """
+    """Generate and optimize molecular conformers (RDKit ETKDG embedding + UFF optimization) with optional filtering."""
 
     def __init__(
         self,
@@ -59,10 +49,8 @@ class RDKitConformerGenerator:
 
         Args:
             num_conf (int): Number of conformers to embed per molecule.
-            e_thresh (float, optional): Energy cutoff for dropping high-energy
-                conformers. If None, no energy filtering is applied.
-            num_cpu (int): Number of threads to use when generating conformers
-                in parallel.
+            e_thresh (float, optional): Energy cutoff for dropping high-energy conformers; None disables filtering.
+            num_cpu (int): Number of threads to use when generating conformers in parallel.
             verbose (bool): Whether to print a progress indicator.
             seed (int): Random seed for conformer embedding.
         """
@@ -114,15 +102,7 @@ class RDKitConformerGenerator:
         return mol
 
     def run(self, list_of_mols: list[MolOrFailed]) -> list[list[Mol] | FailedMolecule | FailedConformer]:
-        """Generate conformers for a list of molecules in parallel.
-
-        Molecules that fail (already-failed sentinels passed in, or ones
-        that fail embedding/optimization here) are returned as-is rather
-        than raised, so one bad molecule doesn't abort the whole batch.
-        Successful molecules come back as a plain ``list[Mol]`` - one
-        single-conformer copy per embedded conformer - not a special
-        wrapper type.
-        """
+        """Generate conformers for a list of molecules in parallel; failures pass through instead of raising."""
 
         total = len(list_of_mols)
         completed = [0]
