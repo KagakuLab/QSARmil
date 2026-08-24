@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import numpy as np
-from rdkit.Chem import Descriptors3D
+from rdkit.Chem import Descriptors3D, Mol
 
 
-def validate_desc_vector(x):
+def validate_desc_vector(x: np.ndarray) -> np.ndarray:
     """Validate and clean a descriptor vector.
 
     Replaces NaN values with the mean of valid elements and caps extreme values
@@ -32,13 +34,21 @@ class RDKitDescriptor3D:
         desc_name (str, optional): Name of the 3D descriptor function from RDKit Descriptors3D.
     """
 
-    def __init__(self, desc_name=None):
+    def __init__(self, desc_name: str | None = None) -> None:
+        """Look up the RDKit descriptor function to use.
+
+        Args:
+            desc_name (str, optional): Name of a function on
+                ``rdkit.Chem.Descriptors3D.rdMolDescriptors``. Left unset by
+                subclasses that override ``__call__`` themselves (e.g.
+                :class:`RDKitGEOM`).
+        """
         super().__init__()
 
         if desc_name:
             self.transformer = getattr(Descriptors3D.rdMolDescriptors, desc_name)
 
-    def __call__(self, mol, conformer_id=None):
+    def __call__(self, mol: Mol, conformer_id: int | None = None) -> np.ndarray:
         """Compute the 3D descriptor for a molecule and optional conformer.
 
         Args:
@@ -60,7 +70,7 @@ class RDKitGEOM(RDKitDescriptor3D):
     of gyration, etc.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the RDKitGEOM descriptor with a fixed list of geometric
         descriptors."""
         super().__init__()
@@ -79,7 +89,7 @@ class RDKitGEOM(RDKitDescriptor3D):
             "CalcPBF",
         ]
 
-    def __call__(self, mol, conformer_id=None):
+    def __call__(self, mol: Mol, conformer_id: int | None = None) -> np.ndarray:
         """Compute all geometric descriptors for a molecule and optional
         conformer.
 
@@ -102,7 +112,8 @@ class RDKitGEOM(RDKitDescriptor3D):
 class RDKitAUTOCORR(RDKitDescriptor3D):
     """Compute 3D autocorrelation descriptors for a molecule."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Wire up RDKit's ``CalcAUTOCORR3D``."""
         super().__init__("CalcAUTOCORR3D")
 
 
@@ -110,26 +121,30 @@ class RDKitRDF(RDKitDescriptor3D):
     """Compute 3D radial distribution function (RDF) descriptors for a
     molecule."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Wire up RDKit's ``CalcRDF``."""
         super().__init__("CalcRDF")
 
 
 class RDKitMORSE(RDKitDescriptor3D):
     """Compute 3D Morse descriptors for a molecule."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Wire up RDKit's ``CalcMORSE``."""
         super().__init__("CalcMORSE")
 
 
 class RDKitWHIM(RDKitDescriptor3D):
     """Compute 3D WHIM descriptors for a molecule."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Wire up RDKit's ``CalcWHIM``."""
         super().__init__("CalcWHIM")
 
 
 class RDKitGETAWAY(RDKitDescriptor3D):
     """Compute 3D GETAWAY descriptors for a molecule."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Wire up RDKit's ``CalcGETAWAY``."""
         super().__init__("CalcGETAWAY")
