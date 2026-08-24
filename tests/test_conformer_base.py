@@ -36,13 +36,25 @@ def test_run_applies_e_thresh_filtering():
     assert len(results[0]) <= 10
 
 
-def test_run_none_input_raises():
-    """A None input becomes a FailedConformer(None), and ConformerEnsemble
-    itself still raises on that (not fixed at this layer - see LazyMIL.run,
-    which pre-filters with DataValidator instead)."""
+def test_run_none_input_returns_failed_conformer():
+    """A None input becomes a FailedConformer(None) and is passed through
+    by run() rather than raised - LazyMIL now handles such failures itself
+    (see drop_failed_molecules / target_fallback in qsarmil.lazy)."""
     gen = ConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
-    with pytest.raises(ValueError):
-        gen.run([None])
+    results = gen.run([None])
+    assert len(results) == 1
+    assert isinstance(results[0], FailedConformer)
+
+
+def test_run_mixed_batch_passes_through_failures():
+    """One bad molecule in a batch doesn't stop the good ones from being
+    embedded, and isn't wrapped into a ConformerEnsemble."""
+    gen = ConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
+    mol = Chem.MolFromSmiles("CCO")
+    results = gen.run([mol, None])
+    assert len(results) == 2
+    assert isinstance(results[0], ConformerEnsemble)
+    assert isinstance(results[1], FailedConformer)
 
 
 def test_generate_conformers_passes_through_failed_sentinels():

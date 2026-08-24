@@ -21,15 +21,16 @@ To facilitate benchmarking ``QSARmil`` against alternative platforms, we develop
 the need for manual adjustments to the model-building protocol. The pipeline automatically generates multiple
 multi-conformer models using diverse descriptor sets and multi-instance learning methods, and then applies
 a genetic algorithm to identify the optimal consensus combination of individual models. The input data should be provided
-as a pandas DataFrame, where the first column contains the molecular SMILES strings and the second column contains
-the corresponding target property values.
+as a list of molecular SMILES strings and a list of the corresponding target property values.
+Use ``MultiConformerRegressor`` for continuous properties and ``MultiConformerClassifier`` for binary classification.
 
 .. code-block:: python
 
-     from qsarmil.meta import MultiConformerModel
+     from qsarmil.meta import MultiConformerRegressor
 
-     model = MultiConformerModel(num_conf=10, hopt=True, output_folder="mcf", verbose=True)
-     y_pred = model.run_predict(df_train, df_test)
+     model = MultiConformerRegressor(num_conf=10, hopt=True, output_folder="mcf", verbose=True)
+     model.train(smiles_train, y_train)
+     y_pred = model.predict(smiles_test)
 
 Use cases
 --------------------------

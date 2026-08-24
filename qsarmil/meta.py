@@ -4,27 +4,38 @@ import os
 import pickle
 import shutil
 import tempfile
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
+import numpy as np
 import pandas as pd
+import psutil
 from qsarcons.consensus import GeneticSearch
 from rdkit import RDLogger
-from sklearn.model_selection import train_test_split
 
 from qsarmil.lazy import LazyMIL
+from qsarmil.utils.logging import print_step_header
 
 RDLogger.DisableLog("rdApp.*")
 
 
-class MultiConformerModel:
-    """Lazy MIL pipeline with train/predict split and consensus model selection.
+class MultiConformerEstimator:
+    """Shared implementation behind :class:`MultiConformerRegressor` and
+    :class:`MultiConformerClassifier`.
 
     Wraps :class:`~qsarmil.lazy.LazyMIL` to train every built-in
     descriptor/estimator combination, then picks the best-performing
     consensus of models on the validation split via a genetic search
-    (:class:`qsarcons.consensus.GeneticSearch`) and applies it to the test set.
+    (:class:`qsarcons.consensus.GeneticSearch`).
+
+    Not meant to be instantiated directly - use one of the two subclasses
+    so the task type is explicit rather than auto-detected from ``y``
+    (auto-detection can misfire, e.g. a 2-value numeric target looks
+    identical to a binary-classification target).
     """
+
+    _task: str | None = None
 
     def __init__(
         self,
@@ -34,6 +45,7 @@ class MultiConformerModel:
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
+        val_size: float = 0.2,
     ) -> None:
         """Store the settings passed through to the underlying LazyMIL run.
 
@@ -50,6 +62,8 @@ class MultiConformerModel:
                 (conformer embedding, molecule validation, hyperparameter
                 search). Does **not** cover the final genetic consensus
                 search - see the note in :meth:`train`.
+            val_size (float): Fraction of the training data held out as a
+                random validation split (used for consensus selection).
         """
         super().__init__()
 
@@ -59,6 +73,7 @@ class MultiConformerModel:
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.verbose = verbose
         self.seed = seed
+        self.val_size = val_size
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None
         self._lazy_model: LazyMIL | None = None
@@ -69,27 +84,18 @@ class MultiConformerModel:
 
         return bool(self.best_consensus)
 
-    def _ensure_test_target_column(self, df_test: pd.DataFrame) -> pd.DataFrame:
-        """Ensure test data has at least two columns for LazyMIL compatibility."""
-
-        df_test = df_test.copy()
-        if len(df_test.columns) == 1:
-            df_test[1] = [None for _ in df_test.index]
-        return df_test
-
-
-    def train(self, df_train: pd.DataFrame) -> MultiConformerModel:
+    def train(self, smiles: Sequence[str], y: Sequence[Any]) -> MultiConformerEstimator:
         """Train/model-select once and cache everything required for later prediction.
 
         Args:
-            df_train (pd.DataFrame): Training data; column 0 is SMILES,
-                column 1 is the target.
+            smiles (Sequence[str]): Training SMILES strings.
+            y (Sequence[Any]): Target property value for each SMILES, same
+                length and order as ``smiles``.
 
         Returns:
-            MultiConformerModel: This instance, now containing trained state.
+            MultiConformerEstimator: This instance, now containing trained state.
         """
 
-        train_df, val_df = train_test_split(df_train, test_size=0.2, random_state=self.seed)
         lazy_ml = LazyMIL(
             num_conf=self.num_conf,
             hopt=self.hopt,
@@ -97,45 +103,57 @@ class MultiConformerModel:
             output_folder=self.output_folder,
             verbose=self.verbose,
             seed=self.seed,
+            val_size=self.val_size,
+            task=self._task,
         )
-        lazy_ml.run(train_df, val_df, val_df)
+        lazy_ml.run(smiles, y)
 
         res_val = pd.read_csv(f"{self.output_folder}/val.csv")
         x_val, true_val = res_val.iloc[:, 2:], res_val.iloc[:, 1]
 
         if self.verbose:
-            print("\nRunning genetic consensus search ...")
-            print(
-                "Note: this step's randomness isn't controlled by `seed` - "
-                "qsarcons.GeneticSearch doesn't expose one."
-            )
+            print_step_header(5, "Genetic model consensus search")
 
+        start = time.time()
         cons_search = GeneticSearch(cons_size="auto", n_iter=50)
         best_cons = cons_search.run(x_val, true_val)
+        elapsed_min = (time.time() - start) / 60
+        mem_gb = psutil.Process().memory_info().rss / (1024**3)
 
         self.best_consensus = list(best_cons)
         self._consensus_search = cons_search
         self._lazy_model = lazy_ml
 
         if self.verbose:
-            print("Best consensus:")
-            print("\n".join(self.best_consensus))
+            print(f"> Finished in {elapsed_min:.2f} min | Memory usage: {mem_gb:.3f} G")
+            print("> Best genetic consensus:")
+            for name in self.best_consensus:
+                print(f"       -{name}")
 
         return self
 
-    def predict(self, df_test: pd.DataFrame, save: bool = False) -> pd.DataFrame:
-        """Predict for a new test dataframe using the stored trained state."""
+    def predict(self, smiles: Sequence[str], save: bool = False) -> list[Any]:
+        """Predict for new SMILES using the stored trained state.
+
+        Args:
+            smiles (Sequence[str]): SMILES strings to predict on.
+            save (bool): Whether to also write LazyMIL's per-model
+                predictions to ``test.csv`` in ``output_folder``.
+
+        Returns:
+            list: Predicted property value for each input SMILES, in the
+            same order as ``smiles``.
+        """
 
         if not self.is_trained:
             raise RuntimeError("Model is not trained. Call `train` or `load` first.")
 
-        df_test = self._ensure_test_target_column(df_test)
         if self._lazy_model is not None and self._lazy_model.is_trained:
-            res_test = self._lazy_model.predict(df_test, save=save)
+            res_test = self._lazy_model.predict(smiles, save=save)
         else:
             raise RuntimeError("LazyMIL model is not trained. Call `train` or `load` first.")
 
-        x_test = res_test.iloc[:, 2:]
+        x_test = res_test.iloc[:, 1:]
 
         missing_cols = [c for c in self.best_consensus if c not in x_test.columns]
         if missing_cols:
@@ -152,9 +170,7 @@ class MultiConformerModel:
         else:
             pred_test = x_test[self.best_consensus].mean(axis=1).to_numpy()
 
-        pred_df = pd.concat([res_test["SMILES"], pd.Series(pred_test)], axis=1)
-        pred_df = pred_df.rename(columns={0: "pred"})
-        return pred_df
+        return list(pred_test)
 
     def save(self, model_path: str | Path | None = None) -> None:
         """Serialize the trained model state to disk."""
@@ -169,6 +185,7 @@ class MultiConformerModel:
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
+            "val_size": self.val_size,
             "best_consensus": self.best_consensus,
             "consensus_search": self._consensus_search,
             "lazy_model": self._lazy_model,
@@ -185,7 +202,7 @@ class MultiConformerModel:
             pickle.dump(state, f)
 
     @classmethod
-    def load(cls, model_path: str | Path, output_folder: str | None = None) -> MultiConformerModel:
+    def load(cls, model_path: str | Path, output_folder: str | None = None) -> MultiConformerEstimator:
         """Load a serialized model state."""
 
         model_path = Path(model_path)
@@ -199,6 +216,7 @@ class MultiConformerModel:
             output_folder=output_folder,
             verbose=state["verbose"],
             seed=state["seed"],
+            val_size=state.get("val_size", 0.2),
         )
         model.best_consensus = list(state["best_consensus"])
         model._consensus_search = state.get("consensus_search")
@@ -210,30 +228,80 @@ class MultiConformerModel:
             os.makedirs(model.output_folder)
         return model
 
-    def predictFromSMILES(self, smiles: list[str] | pd.Series) -> pd.DataFrame:
-        """Load a serialized model and predict directly from SMILES strings."""
 
-        df_test = pd.DataFrame({0: list(smiles)})
-        return self.predict(df_test)
+def _check_continuous_target(y: Sequence[Any]) -> None:
+    """Raise if ``y`` looks like classification labels rather than a
+    continuous property.
 
-    def run_predict(self, df_train: pd.DataFrame, df_test: pd.DataFrame) -> pd.DataFrame:
-        """Backwards-compatible one-shot API: train then predict.
+    This can't be perfectly reliable (there's no way to tell "0.0 and 1.0
+    happen to be the only two potency values in this dataset" from "0 and 1
+    are class labels" without more context), so the check is deliberately
+    narrow: it only flags targets whose dtype is boolean or integer, or
+    that aren't numeric at all. A float target is always accepted, even
+    with only a couple of distinct values - that's exactly the case
+    :class:`MultiConformerRegressor` exists to support (see
+    :class:`MultiConformerEstimator`'s docstring).
 
-        Prefer using :meth:`train`, :meth:`save`, :meth:`load`, and
-        :meth:`predict` for a two-phase workflow.
+    Args:
+        y (Sequence[Any]): Target values to check.
 
-        Args:
-            df_train (pd.DataFrame): Training data; column 0 is SMILES,
-                column 1 is the target.
-            df_test (pd.DataFrame): Data to predict on; column 0 is SMILES.
-                A target column is not required and is filled with ``None``
-                if missing.
+    Raises:
+        ValueError: If ``y`` is non-numeric, boolean, or integer-dtyped.
+    """
 
-        Returns:
-            pd.DataFrame: Two columns, ``SMILES`` and ``pred``, one row per
-            test molecule.
+    y_arr = np.asarray(list(y))
+
+    if y_arr.dtype == object or np.issubdtype(y_arr.dtype, np.str_):
+        raise ValueError(
+            "MultiConformerRegressor requires a continuous numeric target, but the values "
+            f"provided are not numeric (dtype={y_arr.dtype}). If these are class labels, use "
+            "MultiConformerClassifier instead."
+        )
+
+    if np.issubdtype(y_arr.dtype, np.bool_) or np.issubdtype(y_arr.dtype, np.integer):
+        raise ValueError(
+            "MultiConformerRegressor received a boolean/integer-only target, which looks like "
+            "classification labels rather than a continuous property. If this is intentional "
+            "(e.g. count data), convert y to float first; otherwise use MultiConformerClassifier."
+        )
+
+
+class MultiConformerRegressor(MultiConformerEstimator):
+    """MultiConformerEstimator pipeline for continuous (regression) targets.
+
+    See :class:`MultiConformerEstimator` for the full train/predict/save/load
+    API. This subclass fixes the task to regression, so ``y`` is never
+    passed through ``sklearn``'s auto-detection - a target with only two
+    distinct numeric values (e.g. ``[1.0, 3.0]``) would otherwise be
+    misdetected as binary classification.
+
+    :meth:`train` additionally rejects targets that are clearly labels
+    rather than a continuous property (booleans, integers, or non-numeric
+    values) - see :func:`_check_continuous_target`.
+    """
+
+    _task = "continuous"
+
+    def train(self, smiles: Sequence[str], y: Sequence[Any]) -> MultiConformerEstimator:
+        """Train, after checking ``y`` doesn't look like classification labels.
+
+        See :meth:`MultiConformerEstimator.train` for the full behavior.
+
+        Raises:
+            ValueError: If ``y`` looks like classification labels rather
+                than a continuous property (see :func:`_check_continuous_target`).
         """
 
-        self.train(df_train)
-        return self.predict(df_test)
+        _check_continuous_target(y)
+        return super().train(smiles, y)
+
+
+class MultiConformerClassifier(MultiConformerEstimator):
+    """MultiConformerEstimator pipeline for binary classification targets.
+
+    See :class:`MultiConformerEstimator` for the full train/predict/save/load
+    API. This subclass fixes the task to binary classification.
+    """
+
+    _task = "binary"
 

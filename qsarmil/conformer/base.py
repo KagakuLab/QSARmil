@@ -85,8 +85,13 @@ class ConformerGenerator:
             AllChem.UFFOptimizeMolecule(mol, confId=conf.GetId())
         return mol
 
-    def run(self, list_of_mols: list[MolOrFailed]) -> list[ConformerEnsemble]:
-        """Generate conformers for a list of molecules in parallel."""
+    def run(self, list_of_mols: list[MolOrFailed]) -> list[ConformerEnsemble | FailedMolecule | FailedConformer]:
+        """Generate conformers for a list of molecules in parallel.
+
+        Molecules that fail (already-failed sentinels passed in, or ones
+        that fail embedding/optimization here) are returned as-is rather
+        than raised, so one bad molecule doesn't abort the whole batch.
+        """
 
         total = len(list_of_mols)
         completed = [0]
@@ -110,7 +115,10 @@ class ConformerGenerator:
                 delayed(self._generate_conformers)(mol) for mol in list_of_mols
             )
 
-            results = [ConformerEnsemble(i) for i in results]
+            results = [
+                mol if isinstance(mol, (FailedMolecule, FailedConformer)) else ConformerEnsemble(mol)
+                for mol in results
+            ]
         finally:
             joblib.parallel.BatchCompletionCallBack = old_callback
 
