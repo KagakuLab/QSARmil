@@ -9,7 +9,6 @@ from qsarmil.descriptor.rdkit import (
     RDKitMORSE,
     RDKitRDF,
     RDKitWHIM,
-    validate_desc_vector,
 )
 
 
@@ -21,25 +20,6 @@ def _embedded_mol(smiles="CC(C)Cc1ccc(cc1)C(C)C(=O)O"):
     AllChem.EmbedMolecule(mol, params)
     AllChem.UFFOptimizeMolecule(mol)
     return mol
-
-
-def test_validate_desc_vector_no_issues():
-    x = np.array([1.0, 2.0, 3.0])
-    out = validate_desc_vector(x)
-    assert np.array_equal(out, x)
-
-
-def test_validate_desc_vector_imputes_nan():
-    x = np.array([1.0, np.nan, 3.0])
-    out = validate_desc_vector(x)
-    assert not np.isnan(out).any()
-    assert out[1] == 2.0  # mean of 1.0 and 3.0
-
-
-def test_validate_desc_vector_caps_extreme_values():
-    x = np.array([1.0, 2.0, 1e30])
-    out = validate_desc_vector(x)
-    assert out[2] == 1.5  # mean of the two reasonable values
 
 
 def test_rdkit_geom_returns_11_descriptors():

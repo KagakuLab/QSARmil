@@ -6,11 +6,11 @@ import pandas as pd
 import pytest
 from conftest import MockEstimator
 
-import qsarmil.lazy as lazy_mod
-import qsarmil.meta as meta_mod
+import qsarmil.modelling.lazy as lazy_mod
+import qsarmil.modelling.meta as meta_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
-from qsarmil.meta import MultiConformerClassifier, MultiConformerEstimator, MultiConformerRegressor
+from qsarmil.modelling.meta import MultiConformerClassifier, MultiConformerEstimator, MultiConformerRegressor
 
 
 class FakeGeneticSearch:

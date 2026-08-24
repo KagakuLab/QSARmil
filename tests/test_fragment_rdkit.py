@@ -2,7 +2,6 @@ from rdkit import Chem
 from rdkit.Chem import BRICS
 
 from qsarmil.fragment.rdkit import RDKitFragmentGenerator
-from qsarmil.utils.ensemble import FragmentEnsemble
 from qsarmil.utils.logging import FailedConformer, FailedMolecule
 
 
@@ -10,7 +9,7 @@ def test_generate_fragments_success():
     gen = RDKitFragmentGenerator(verbose=False)
     mol = Chem.MolFromSmiles("CC(=O)Nc1ccc(cc1)OCC")  # phenacetin, BRICS-decomposable
     result = gen._generate_fragments(mol)
-    assert isinstance(result, FragmentEnsemble)
+    assert isinstance(result, list)
     assert len(result) >= 1
 
 
@@ -33,7 +32,7 @@ def test_generate_fragments_falls_back_on_exception(monkeypatch, capsys):
 
     monkeypatch.setattr(BRICS, "BRICSDecompose", raise_decompose)
     result = gen._generate_fragments(mol)
-    assert isinstance(result, FragmentEnsemble)
+    assert isinstance(result, list)
     assert list(result) == [mol]
     captured = capsys.readouterr()
     assert "boom" in captured.out

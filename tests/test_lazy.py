@@ -9,16 +9,14 @@ import pytest
 from conftest import MockEstimator
 from milearn.wrapper import BagWrapper
 
-import qsarmil.lazy as lazy_mod
+import qsarmil.modelling.lazy as lazy_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.utils.logging import FailedConformer, FailedMolecule
-from qsarmil.lazy import (
+from qsarmil.modelling.lazy import (
     LazyMIL,
     build_model,
     calc_descriptors,
-    clean_descriptors,
-    compute_column_means,
     gen_conformers,
     report_conformer_generation,
     report_smiles_parsing,
@@ -115,7 +113,7 @@ def test_target_fallback_binary_is_most_common_class():
 
 
 def test_subset_preserves_index_order():
-    from qsarmil.lazy import _subset
+    from qsarmil.modelling.lazy import _subset
 
     assert _subset(["a", "b", "c", "d"], [2, 0]) == ["c", "a"]
 
@@ -135,37 +133,27 @@ def test_gen_conformers_seed_affects_output():
     assert (coords_a != coords_b).any()
 
 
-def test_compute_column_means():
-    bags = [np.array([[10.0, 1.0]]), np.array([[20.0, 1.0]])]
-    means = compute_column_means(bags)
-    assert means[0] == 15.0
-    assert means[1] == 1.0
-
-
-def test_clean_descriptors_self_computed():
-    bags = [np.array([[np.nan, 1.0], [10.0, 1.0]])]
-    cleaned = clean_descriptors(bags)
-    assert not np.isnan(cleaned[0]).any()
-    assert cleaned[0][0, 0] == 10.0
-
-
-def test_clean_descriptors_given_means():
-    bags = [np.array([[np.nan, 1.0]])]
-    given_means = np.array([99.0, 1.0])
-    cleaned = clean_descriptors(bags, col_means=given_means)
-    assert cleaned[0][0, 0] == 99.0
-
-
 def test_calc_descriptors_real():
     conf_list = gen_conformers(["CCO", "c1ccccc1"], num_conf=2, num_cpu=1, verbose=False)
     calc = DescriptorWrapper(RDKitGEOM(), verbose=False)
-    bags = calc_descriptors(conf_list, calc, verbose=False)
+    bags, col_stats = calc_descriptors(conf_list, calc, verbose=False)
     assert len(bags) == 2
     assert bags[0].shape == (2, 11)
 
-    train_means = compute_column_means(bags)
-    bags_2 = calc_descriptors(conf_list, calc, verbose=False, col_means=train_means)
+    bags_2, _ = calc_descriptors(conf_list, calc, verbose=False, col_stats=col_stats)
     assert len(bags_2) == 2
+
+
+def test_calc_descriptors_reports_dropped_columns_when_verbose(capsys):
+    calc = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
+    conf_list = [[object()], [object()]]  # transformer ignores its input entirely
+    calc.transformer = lambda mol, **kw: np.array([1.0, np.nan])
+
+    bags, col_stats = calc_descriptors(conf_list, calc, verbose=True)
+
+    assert list(col_stats["keep_mask"]) == [True, False]
+    assert bags[0].shape == (1, 1)
+    assert "Removed 1 of 2" in capsys.readouterr().out
 
 
 def test_scale_descriptors():
@@ -254,19 +242,19 @@ def test_build_model_hopt_path():
 
 
 def test_default_model_imports():
-    from qsarmil.lazy import REGRESSORS
+    from qsarmil.modelling.lazy import REGRESSORS
     for factory in REGRESSORS.values():
         est = factory()
         assert hasattr(est, "fit")
         assert hasattr(est, "predict")
-    from qsarmil.lazy import CLASSIFIERS
+    from qsarmil.modelling.lazy import CLASSIFIERS
     for factory in CLASSIFIERS.values():
         est = factory()
         assert hasattr(est, "fit")
         assert hasattr(est, "predict")
 
 def test_default_descriptor_imports():
-    from qsarmil.lazy import DESCRIPTORS
+    from qsarmil.modelling.lazy import DESCRIPTORS
     for factory in DESCRIPTORS.values():
         desc = factory()
         assert hasattr(desc, "run")
@@ -577,7 +565,7 @@ def test_lazymil_predict_silent_when_using_cached_descriptors(tmp_path, capsys):
             "descriptor": "RDKitGEOM",
             "estimator": MockEstimator(supports_hopt=False),
             "scaler": IdentityScaler(),
-            "train_col_means": np.array([0.0, 0.0]),
+            "col_stats": {"keep_mask": np.array([True, True])},
         }
     }
     lazy._cache_descriptor("RDKitGEOM", ["CCO"], [np.array([[0.1, 0.2]])])
@@ -590,7 +578,11 @@ def test_lazymil_predict_silent_when_using_cached_descriptors(tmp_path, capsys):
 
 def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
-    monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
+    monkeypatch.setattr(
+        lazy_mod,
+        "calc_descriptors",
+        lambda *args, **kwargs: ([np.array([[0.1, 0.2]])], {"keep_mask": np.array([True, True])}),
+    )
 
     class IdentityScaler:
         def transform(self, x):
@@ -608,7 +600,7 @@ def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
             "descriptor": "RDKitGEOM",
             "estimator": BadEstimator(),
             "scaler": IdentityScaler(),
-            "train_col_means": np.array([0.0, 0.0]),
+            "col_stats": {"keep_mask": np.array([True, True])},
         }
     }
 
@@ -672,7 +664,7 @@ def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer(
 
 
 def test_print_progress_item(capsys):
-    from qsarmil.lazy import _print_progress_item
+    from qsarmil.modelling.lazy import _print_progress_item
 
     _print_progress_item(1, 72, "RDKitGEOM|Mock", elapsed_min=7.876, mem_gb=1.2549)
     out = capsys.readouterr().out

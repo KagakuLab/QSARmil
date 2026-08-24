@@ -26,7 +26,7 @@ Use ``MultiConformerRegressor`` for continuous properties and ``MultiConformerCl
 
 .. code-block:: python
 
-     from qsarmil.meta import MultiConformerRegressor
+     from qsarmil.modelling.meta import MultiConformerRegressor
 
      model = MultiConformerRegressor(num_conf=10, hopt=True, output_folder="mcf", verbose=True)
      model.train(smiles_train, y_train)

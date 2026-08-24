@@ -14,7 +14,7 @@ import psutil
 from qsarcons.consensus import GeneticSearch
 from rdkit import RDLogger
 
-from qsarmil.lazy import LazyMIL
+from qsarmil.modelling.lazy import LazyMIL
 from qsarmil.utils.logging import print_step_header
 
 RDLogger.DisableLog("rdApp.*")
@@ -24,7 +24,7 @@ class MultiConformerEstimator:
     """Shared implementation behind :class:`MultiConformerRegressor` and
     :class:`MultiConformerClassifier`.
 
-    Wraps :class:`~qsarmil.lazy.LazyMIL` to train every built-in
+    Wraps :class:`~qsarmil.modelling.lazy.LazyMIL` to train every built-in
     descriptor/estimator combination, then picks the best-performing
     consensus of models on the validation split via a genetic search
     (:class:`qsarcons.consensus.GeneticSearch`).
@@ -58,7 +58,7 @@ class MultiConformerEstimator:
                 directory is created.
             verbose (bool): Whether to print progress from the underlying steps.
             seed (int): Random seed used for the train/val split and for
-                everything :class:`~qsarmil.lazy.LazyMIL` seeds internally
+                everything :class:`~qsarmil.modelling.lazy.LazyMIL` seeds internally
                 (conformer embedding, molecule validation, hyperparameter
                 search). Does **not** cover the final genetic consensus
                 search - see the note in :meth:`train`.

@@ -97,9 +97,9 @@ class FailedDescriptor:
 def print_step_header(step: int, title: str, bar_width: int = 26) -> None:
     """Print a ``+---+ / Step-N. Title / +---+`` banner for a pipeline stage.
 
-    Used to give :meth:`~qsarmil.lazy.LazyMIL.run` and
-    :meth:`~qsarmil.meta.MultiConformerRegressor.train`/
-    :meth:`~qsarmil.meta.MultiConformerClassifier.train`'s verbose output a
+    Used to give :meth:`~qsarmil.modelling.lazy.LazyMIL.run` and
+    :meth:`~qsarmil.modelling.meta.MultiConformerRegressor.train`/
+    :meth:`~qsarmil.modelling.meta.MultiConformerClassifier.train`'s verbose output a
     consistent, easy-to-scan structure across their shared numbered steps.
 
     Args:

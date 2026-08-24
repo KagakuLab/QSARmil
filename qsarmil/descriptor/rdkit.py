@@ -4,29 +4,6 @@ import numpy as np
 from rdkit.Chem import Descriptors3D, Mol
 
 
-def validate_desc_vector(x: np.ndarray) -> np.ndarray:
-    """Validate and clean a descriptor vector.
-
-    Replaces NaN values with the mean of valid elements and caps extreme values
-    beyond 1e25 by replacing them with the mean of reasonable elements.
-
-    Args:
-        x (np.ndarray): Descriptor vector to validate.
-
-    Returns:
-        np.ndarray: Cleaned descriptor vector.
-    """
-    # nan values
-    if np.isnan(x).sum() > 0:
-        imp = np.mean(x[~np.isnan(x)])
-        x = np.where(np.isnan(x), imp, x)  # TODO temporary solution, should be revised
-    # extreme dsc values
-    if (abs(x) >= 10**25).sum() > 0:
-        imp = np.mean(x[abs(x) <= 10**25])
-        x = np.where(abs(x) <= 10**25, x, imp)
-    return x
-
-
 class RDKitDescriptor3D:
     """Base class to compute 3D molecular descriptors using RDKit.
 
@@ -49,18 +26,22 @@ class RDKitDescriptor3D:
             self.transformer = getattr(Descriptors3D.rdMolDescriptors, desc_name)
 
     def __call__(self, mol: Mol, conformer_id: int | None = None) -> np.ndarray:
-        """Compute the 3D descriptor for a molecule and optional conformer.
+        """Compute the raw 3D descriptor for a molecule and optional conformer.
+
+        Values aren't cleaned here - cleaning (dropping unreliable columns)
+        needs bags from every conformer collected first, and is generic
+        across every descriptor source (RDKit or MolFeat), so it lives on
+        :class:`~qsarmil.descriptor.wrapper.DescriptorWrapper` instead - see
+        :meth:`~qsarmil.descriptor.wrapper.DescriptorWrapper.postprocess`.
 
         Args:
             mol (rdkit.Chem.Mol): Molecule to compute descriptors for.
             conformer_id (int, optional): Specific conformer ID to use.
 
         Returns:
-            np.ndarray: Validated descriptor vector.
+            np.ndarray: Raw, uncleaned descriptor vector.
         """
-        x = np.array(self.transformer(mol, confId=conformer_id))
-        x = validate_desc_vector(x)
-        return x
+        return np.array(self.transformer(mol, confId=conformer_id))
 
 
 class RDKitGEOM(RDKitDescriptor3D):
@@ -98,15 +79,13 @@ class RDKitGEOM(RDKitDescriptor3D):
             conformer_id (int, optional): Specific conformer ID to use.
 
         Returns:
-            np.ndarray: Validated geometric descriptor vector.
+            np.ndarray: Raw, uncleaned geometric descriptor vector.
         """
         x = []
         for desc_name in self.columns:
             transformer = getattr(Descriptors3D.rdMolDescriptors, desc_name)
             x.append(transformer(mol, confId=conformer_id))
-        x = np.array(x)
-        x = validate_desc_vector(x)
-        return x
+        return np.array(x)
 
 
 class RDKitAUTOCORR(RDKitDescriptor3D):
