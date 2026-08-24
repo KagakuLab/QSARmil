@@ -23,6 +23,7 @@ class MultiConformerEstimator:
     """Shared LazyMIL + consensus-search pipeline behind MultiConformerRegressor/MultiConformerClassifier."""
 
     _task: str | None = None
+    _val_size: float = 0.2
 
     def __init__(
         self,
@@ -32,7 +33,6 @@ class MultiConformerEstimator:
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
-        val_size: float = 0.2,
     ) -> None:
         """Store the settings passed through to the underlying LazyMIL run.
 
@@ -43,7 +43,6 @@ class MultiConformerEstimator:
             output_folder (str, optional): Directory for LazyMIL's CSVs; a fresh temp dir is created if omitted.
             verbose (bool): Whether to print progress from the underlying steps.
             seed (int): Random seed for the train/val split and everything LazyMIL seeds internally.
-            val_size (float): Fraction of the training data held out as a random validation split.
         """
         super().__init__()
 
@@ -53,7 +52,6 @@ class MultiConformerEstimator:
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.verbose = verbose
         self.seed = seed
-        self.val_size = val_size
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None
         self._lazy_model: LazyMIL | None = None
@@ -82,7 +80,7 @@ class MultiConformerEstimator:
             output_folder=self.output_folder,
             verbose=self.verbose,
             seed=self.seed,
-            val_size=self.val_size,
+            val_size=self._val_size,
             task=self._task,
         )
         lazy_ml.run(smiles, y)
@@ -162,7 +160,6 @@ class MultiConformerEstimator:
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
-            "val_size": self.val_size,
             "best_consensus": self.best_consensus,
             "consensus_search": self._consensus_search,
             "lazy_model": self._lazy_model,
@@ -193,7 +190,6 @@ class MultiConformerEstimator:
             output_folder=output_folder,
             verbose=state["verbose"],
             seed=state["seed"],
-            val_size=state.get("val_size", 0.2),
         )
         model.best_consensus = list(state["best_consensus"])
         model._consensus_search = state.get("consensus_search")

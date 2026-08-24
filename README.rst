@@ -44,13 +44,13 @@ Command-line interface
 
 .. code-block:: bash
 
-    qsarmil train --train-path regression.csv --task-type regression --output-dir mcfm
+    qsarmil train --train-path regression.csv --task-type regression --output-folder mcfm
     qsarmil predict --test-path regression.csv --model-path mcfm/model.pkl --output-file mcfm/test_predictions.csv
 
-``--train-path``/``--test-path`` point to a CSV with a ``smiles`` column and, for training, a ``y`` target column
-(override these names with ``--smiles-column``/``--target-column``). ``--task-type`` is ``regression`` or
-``classification``. Run ``qsarmil train --help`` or ``qsarmil predict --help`` for the full list of options
-(``--num-conf``, ``--hopt``, ``--num-cpu``, ``--val-size``, ``--seed``, ``--quiet``, and more).
+``--train-path``/``--test-path`` point to a CSV whose first column is SMILES and, for training, whose second column
+is the target property. ``--task-type`` is ``regression`` or ``classification``. Run ``qsarmil train --help`` or
+``qsarmil predict --help`` for the full list of options (``--num-conf``, ``--hopt``, ``--num-cpu``, ``--seed``,
+``--verbose``, and more).
 
 Development
 --------------------------
