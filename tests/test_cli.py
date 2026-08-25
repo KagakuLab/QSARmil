@@ -281,6 +281,113 @@ def test_train_quiet_by_default(monkeypatch, tmp_path, regression_csv):
     assert "Model saved to" in result.output
 
 
+def test_train_accelerator_choice_is_forwarded(monkeypatch, tmp_path, regression_csv):
+    _patch_fast_pipeline(monkeypatch)
+    captured_kwargs = {}
+    original_init = cli_mod.MultiConformerRegressor.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(cli_mod.MultiConformerRegressor, "__init__", spy_init)
+
+    runner = CliRunner()
+    output_folder = tmp_path / "mcfm"
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "train",
+            "--train-path",
+            str(regression_csv),
+            "--task-type",
+            "regression",
+            "--output-folder",
+            str(output_folder),
+            "--num-conf",
+            "2",
+            "--num-cpu",
+            "1",
+            "--accelerator",
+            "gpu",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured_kwargs["accelerator"] == "gpu"
+
+
+def test_train_accelerator_rejects_auto(tmp_path, regression_csv):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "train",
+            "--train-path",
+            str(regression_csv),
+            "--task-type",
+            "regression",
+            "--output-folder",
+            str(tmp_path / "mcfm"),
+            "--accelerator",
+            "auto",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "auto" in result.output.lower()
+
+
+def test_predict_accelerator_override_is_forwarded(monkeypatch, tmp_path, regression_csv):
+    _patch_fast_pipeline(monkeypatch)
+    runner = CliRunner()
+    output_folder = tmp_path / "mcfm"
+
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "train",
+            "--train-path",
+            str(regression_csv),
+            "--task-type",
+            "regression",
+            "--output-folder",
+            str(output_folder),
+            "--num-conf",
+            "2",
+            "--num-cpu",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    model_path = output_folder / "model.pkl"
+
+    seen = []
+    original_predict = cli_mod.MultiConformerEstimator.predict
+
+    def spy_predict(self, smiles, save=False, accelerator=None):
+        seen.append(accelerator)
+        return original_predict(self, smiles, save=save, accelerator=accelerator)
+
+    monkeypatch.setattr(cli_mod.MultiConformerEstimator, "predict", spy_predict)
+
+    output_file = tmp_path / "predictions.csv"
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "predict",
+            "--test-path",
+            str(regression_csv),
+            "--model-path",
+            str(model_path),
+            "--output-file",
+            str(output_file),
+            "--accelerator",
+            "cpu",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == ["cpu"]
+
+
 def test_cli_help_and_version():
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["--help"])

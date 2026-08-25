@@ -49,6 +49,7 @@ class MockEstimator:
 
     def _hopt(self, x: Any, y: Any, param_grid: dict[str, Any], verbose: bool = False) -> None:
         self.hopt_called = True
+        self.last_param_grid = param_grid
 
     def fit(self, x: Any, y: Any) -> MockEstimator:
         self.mean_y = float(np.mean(list(y)))
@@ -57,8 +58,9 @@ class MockEstimator:
     def predict(self, x: Any) -> np.ndarray:
         return np.full(len(x), self.mean_y)
 
-    def __call__(self) -> "MockEstimator":
-        """Allow the mock instance to act as a factory."""
+    def __call__(self, accelerator: str | None = None) -> "MockEstimator":
+        """Allow the mock instance to act as a factory; ignores accelerator like a non-milearn mock would."""
+        self.accelerator = accelerator
         return self
 
 

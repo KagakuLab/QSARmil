@@ -44,6 +44,13 @@ def cli() -> None:
 @click.option("--num-conf", default=10, show_default=True, help="Number of conformers to generate per molecule.")
 @click.option("--hopt", type=bool, default=False, show_default=True, help="Hyperparameter-tune each estimator.")
 @click.option("--num-cpu", default=20, show_default=True, help="Number of CPU threads for conformer generation.")
+@click.option(
+    "--accelerator",
+    type=click.Choice(["cpu", "gpu"]),
+    default="cpu",
+    show_default=True,
+    help="Training device - an explicit choice, never auto-detected.",
+)
 @click.option("--seed", default=42, show_default=True, help="Random seed.")
 @click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
 def train(
@@ -54,6 +61,7 @@ def train(
     num_conf: int,
     hopt: bool,
     num_cpu: int,
+    accelerator: str,
     seed: int,
     verbose: bool,
 ) -> None:
@@ -73,6 +81,7 @@ def train(
         output_folder=str(output_folder),
         verbose=verbose,
         seed=seed,
+        accelerator=accelerator,
     )
     model.train(smiles, y)
 
@@ -101,11 +110,19 @@ def train(
     type=click.Path(dir_okay=False, path_type=Path),
     help="Where to write the predictions CSV.",
 )
+@click.option(
+    "--accelerator",
+    type=click.Choice(["cpu", "gpu"]),
+    default=None,
+    help="Device to run inference on, overriding the model's training-time choice (e.g. predict on CPU "
+    "for a model trained on GPU). Defaults to whatever it was trained with.",
+)
 @click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
 def predict(
     test_path: Path,
     model_path: Path,
     output_file: Path,
+    accelerator: str | None,
     verbose: bool,
 ) -> None:
     """Predict on new SMILES using a model saved by `qsarmil train`."""
@@ -117,7 +134,7 @@ def predict(
     if model._lazy_model is not None:
         model._lazy_model.verbose = verbose
 
-    preds = model.predict(df.iloc[:, 0].tolist())
+    preds = model.predict(df.iloc[:, 0].tolist(), accelerator=accelerator)
 
     out_df = df.copy()
     out_df["prediction"] = preds

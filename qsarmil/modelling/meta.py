@@ -13,7 +13,7 @@ import psutil
 from qsarcons.consensus import GeneticSearch
 from rdkit import RDLogger
 
-from qsarmil.modelling.lazy import LazyMIL
+from qsarmil.modelling.lazy import LazyMIL, _validate_accelerator
 from qsarmil.utils.logging import print_step_header
 
 RDLogger.DisableLog("rdApp.*")
@@ -33,6 +33,7 @@ class MultiConformerEstimator:
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
+        accelerator: str = "cpu",
     ) -> None:
         """Store the settings passed through to the underlying LazyMIL run.
 
@@ -43,6 +44,8 @@ class MultiConformerEstimator:
             output_folder (str, optional): Directory for LazyMIL's CSVs; a fresh temp dir is created if omitted.
             verbose (bool): Whether to print progress from the underlying steps.
             seed (int): Random seed for the train/val split and everything LazyMIL seeds internally.
+            accelerator (str): ``"cpu"`` or ``"gpu"`` - an explicit choice, never auto-detected. Used for
+                training; :meth:`predict` and :meth:`load` can override it later.
         """
         super().__init__()
 
@@ -52,6 +55,7 @@ class MultiConformerEstimator:
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.verbose = verbose
         self.seed = seed
+        self.accelerator = _validate_accelerator(accelerator)
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None
         self._lazy_model: LazyMIL | None = None
@@ -82,6 +86,7 @@ class MultiConformerEstimator:
             seed=self.seed,
             val_size=self._val_size,
             task=self._task,
+            accelerator=self.accelerator,
         )
         lazy_ml.run(smiles, y)
 
@@ -109,12 +114,14 @@ class MultiConformerEstimator:
 
         return self
 
-    def predict(self, smiles: Sequence[str], save: bool = False) -> list[Any]:
+    def predict(self, smiles: Sequence[str], save: bool = False, accelerator: str | None = None) -> list[Any]:
         """Predict for new SMILES using the stored trained state.
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
             save (bool): Whether to also write LazyMIL's per-model predictions to ``test.csv``.
+            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to run inference on, overriding
+                :attr:`accelerator` for this call only - e.g. predict on CPU for a model trained on GPU.
 
         Returns:
             list: Predicted property value for each input SMILES, same order as ``smiles``.
@@ -124,7 +131,7 @@ class MultiConformerEstimator:
             raise RuntimeError("Model is not trained. Call `train` or `load` first.")
 
         if self._lazy_model is not None and self._lazy_model.is_trained:
-            res_test = self._lazy_model.predict(smiles, save=save)
+            res_test = self._lazy_model.predict(smiles, save=save, accelerator=accelerator)
         else:
             raise RuntimeError("LazyMIL model is not trained. Call `train` or `load` first.")
 
@@ -160,6 +167,7 @@ class MultiConformerEstimator:
             "num_cpu": self.num_cpu,
             "verbose": self.verbose,
             "seed": self.seed,
+            "accelerator": self.accelerator,
             "best_consensus": self.best_consensus,
             "consensus_search": self._consensus_search,
             "lazy_model": self._lazy_model,
@@ -176,8 +184,18 @@ class MultiConformerEstimator:
             pickle.dump(state, f)
 
     @classmethod
-    def load(cls, model_path: str | Path, output_folder: str | None = None) -> MultiConformerEstimator:
-        """Load a serialized model state."""
+    def load(
+        cls, model_path: str | Path, output_folder: str | None = None, accelerator: str | None = None
+    ) -> MultiConformerEstimator:
+        """Load a serialized model state.
+
+        Args:
+            model_path (str | Path): Path to a file written by :meth:`save`.
+            output_folder (str, optional): Directory for LazyMIL's CSVs; a fresh temp dir is created if omitted.
+            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to override the accelerator this model was
+                trained with for all future :meth:`predict` calls - e.g. load a GPU-trained model but run
+                inference on CPU from now on. Defaults to whatever accelerator was used at training time.
+        """
 
         model_path = Path(model_path)
         with model_path.open("rb") as f:
@@ -190,12 +208,14 @@ class MultiConformerEstimator:
             output_folder=output_folder,
             verbose=state["verbose"],
             seed=state["seed"],
+            accelerator=accelerator if accelerator is not None else state.get("accelerator", "cpu"),
         )
         model.best_consensus = list(state["best_consensus"])
         model._consensus_search = state.get("consensus_search")
         model._lazy_model = state.get("lazy_model")
         if model._lazy_model is not None:
             model._lazy_model.output_folder = model.output_folder
+            model._lazy_model.accelerator = model.accelerator
             if os.path.exists(model.output_folder):
                 shutil.rmtree(model.output_folder)
             os.makedirs(model.output_folder)

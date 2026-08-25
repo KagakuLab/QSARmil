@@ -28,16 +28,31 @@ from qsarmil.utils.logging import FailedConformer, FailedMolecule, OutputSuppres
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
+_VALID_ACCELERATORS = ("cpu", "gpu")
+
+
+def _validate_accelerator(accelerator: str) -> str:
+    """Require an explicit 'cpu' or 'gpu' choice - no 'auto' fallback to whatever hardware happens to be present."""
+    if accelerator not in _VALID_ACCELERATORS:
+        raise ValueError(f"accelerator must be one of {_VALID_ACCELERATORS!r}, got {accelerator!r}")
+    return accelerator
+
+
 # ==========================================================
 # Configuration
 # ==========================================================
 def model_factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
-    def build() -> Any:
+    is_milearn = module_name.startswith("milearn.")
+
+    def build(accelerator: str | None = None) -> Any:
         cls = getattr(import_module(module_name), class_name)
+        call_kwargs = dict(kwargs)
+        if is_milearn and accelerator is not None:
+            call_kwargs["accelerator"] = accelerator
         # wrap non-MIL models
-        if not module_name.startswith("milearn."):
-            return BagWrapper(cls(*args, **kwargs))
-        return cls(*args, **kwargs)
+        if not is_milearn:
+            return BagWrapper(cls(*args, **call_kwargs))
+        return cls(*args, **call_kwargs)
 
     return build
 
@@ -286,6 +301,7 @@ def build_model(
     estimator_instance: Any,
     hopt: bool = True,
     seed: int = 42,
+    accelerator: str = "auto",
 ) -> tuple[list[Any], list[Any], Any, BagMinMaxScaler]:
     """Fit one estimator and refit on train+val, returning predictions and the artifacts to persist.
 
@@ -297,6 +313,8 @@ def build_model(
         estimator_instance: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
         hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting, if supported.
         seed (int): Random seed passed to the estimator's hyperparameter search.
+        accelerator (str): ``"auto"``/``"cpu"``/``"gpu"``, forced into the hopt search grid so it
+            can't be silently overridden by ``DEFAULT_PARAM_GRID``'s own fixed value.
 
     Returns:
         tuple: ``(pred_train, pred_val, fitted_estimator, fitted_scaler)`` from the final train+val refit.
@@ -307,7 +325,7 @@ def build_model(
 
     # 2. Optimize hyperparameters
     if hopt and hasattr(estimator_instance, "hopt"):
-        param_grid = {**DEFAULT_PARAM_GRID, "random_seed": seed}
+        param_grid = {**DEFAULT_PARAM_GRID, "random_seed": seed, "accelerator": accelerator}
         estimator_instance.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
 
     # 3. Train on train split only (not final training yet)
@@ -339,6 +357,7 @@ class LazyMIL:
         seed: int = 42,
         val_size: float = 0.2,
         task: str | None = None,
+        accelerator: str = "cpu",
     ) -> None:
         """Store settings and (re)create the output folder.
 
@@ -351,6 +370,8 @@ class LazyMIL:
             seed (int): Random seed for embedding, validation, the train/val split, and hyperparameter search.
             val_size (float): Fraction of the data held out as a random validation split inside :meth:`run`.
             task (str, optional): ``"continuous"`` or ``"binary"`` to force the task, skipping auto-detection.
+            accelerator (str): ``"cpu"`` or ``"gpu"`` - an explicit choice, never auto-detected. Used for
+                training in :meth:`run`; :meth:`predict` can override it per call.
         """
         self.hopt = hopt
         self.num_conf = num_conf
@@ -360,6 +381,7 @@ class LazyMIL:
         self.seed = seed
         self.val_size = val_size
         self.task = task
+        self.accelerator = _validate_accelerator(accelerator)
 
         if os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
@@ -384,8 +406,8 @@ class LazyMIL:
 
         return bool(self._trained_models)
 
-    def _ensure_estimator_predict_ready(self, estimator_instance: Any) -> None:
-        """Rebuild a milearn estimator's runtime trainer after unpickling, so predict() works without retraining."""
+    def _ensure_estimator_predict_ready(self, estimator_instance: Any, accelerator: str) -> None:
+        """Rebuild a milearn estimator's runtime trainer (on ``accelerator``) after unpickling."""
 
         module_name = estimator_instance.__class__.__module__
         if not module_name.startswith("milearn."):
@@ -404,7 +426,7 @@ class LazyMIL:
             max_epochs=getattr(hparams, "max_epochs", 1),
             callbacks=[],
             logger=False,
-            accelerator=getattr(hparams, "accelerator", "cpu"),
+            accelerator=accelerator,
             enable_model_summary=False,
             enable_progress_bar=False,
             enable_checkpointing=False,
@@ -543,7 +565,7 @@ class LazyMIL:
 
         for desc_name, (x_train, x_val, col_stats) in per_descriptor.items():
             for est_name, factory in estimators_source.items():
-                estimator = factory()
+                estimator = factory(accelerator=self.accelerator)
 
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
@@ -551,7 +573,8 @@ class LazyMIL:
                 start = time.time()
                 with OutputSuppressor():
                     pred_train, pred_val, fitted_estimator, fitted_scaler = build_model(
-                        x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed
+                        x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
+                        accelerator=self.accelerator,
                     )
                 elapsed_min = (time.time() - start) / 60
                 mem_gb = psutil.Process().memory_info().rss / (1024**3)
@@ -574,12 +597,15 @@ class LazyMIL:
                 if self.verbose:
                     _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
 
-    def predict(self, smiles: Sequence[str], save: bool = False) -> pd.DataFrame:
+    def predict(self, smiles: Sequence[str], save: bool = False, accelerator: str | None = None) -> pd.DataFrame:
         """Run inference from persisted fitted models, imputing molecules that fail with :attr:`_train_fallback`.
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
             save (bool): Whether to also write the result to ``test.csv`` in ``self.output_folder``.
+            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to run inference on, overriding
+                :attr:`accelerator` for this call only - e.g. predict on CPU for a model trained on GPU.
+                Defaults to :attr:`accelerator` (the value set at construction/training time).
 
         Returns:
             pd.DataFrame: A ``SMILES`` column plus one prediction column per trained descriptor/estimator combo.
@@ -587,6 +613,8 @@ class LazyMIL:
 
         if not self.is_trained:
             raise RuntimeError("LazyMIL is not trained. Call `run` or `load` first.")
+
+        accelerator = _validate_accelerator(accelerator if accelerator is not None else self.accelerator)
 
         # Load existing descriptor cache
         self._load_descriptor_cache()
@@ -658,7 +686,7 @@ class LazyMIL:
                 assert not missing
                 x_test_scaled = scaler.transform(x_test)
                 with OutputSuppressor():
-                    self._ensure_estimator_predict_ready(estimator)
+                    self._ensure_estimator_predict_ready(estimator, accelerator)
                     preds = estimator.predict(x_test_scaled)
                 preds_by_smi = dict(zip(valid_smi, preds))
 
@@ -685,6 +713,7 @@ class LazyMIL:
             "seed": self.seed,
             "val_size": self.val_size,
             "task": self.task,
+            "accelerator": self.accelerator,
             "task_type": self._task_type,
             "train_fallback": self._train_fallback,
             "trained_models": self._trained_models,
@@ -693,8 +722,16 @@ class LazyMIL:
             pickle.dump(state, f)
 
     @classmethod
-    def load(cls, model_path: str | Path, output_folder: str | None = None) -> LazyMIL:
-        """Load a serialized LazyMIL artifact for inference-only use."""
+    def load(cls, model_path: str | Path, output_folder: str | None = None, accelerator: str | None = None) -> LazyMIL:
+        """Load a serialized LazyMIL artifact for inference-only use.
+
+        Args:
+            model_path (str | Path): Path to a file written by :meth:`save`.
+            output_folder (str, optional): Output directory; a fresh temp dir is created if omitted.
+            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to override the accelerator this model was
+                trained with - e.g. load a GPU-trained model but run inference on CPU from now on. Defaults
+                to whatever accelerator was used at training time.
+        """
 
         model_path = Path(model_path)
         with model_path.open("rb") as f:
@@ -709,6 +746,7 @@ class LazyMIL:
             seed=state["seed"],
             val_size=state.get("val_size", 0.2),
             task=state.get("task"),
+            accelerator=accelerator if accelerator is not None else state.get("accelerator", "cpu"),
         )
         model._task_type = state.get("task_type")
         model._train_fallback = state.get("train_fallback")

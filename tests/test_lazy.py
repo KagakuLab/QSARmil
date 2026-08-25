@@ -189,6 +189,14 @@ def test_build_model_with_hopt():
     assert hasattr(fitted_scaler, "transform")
 
 
+def test_build_model_forces_accelerator_into_hopt_grid():
+    """The explicit accelerator must win over DEFAULT_PARAM_GRID's own fixed value."""
+    x_train, x_val, y_train, y_val = _tiny_bags()
+    estimator = MockEstimator(supports_hopt=True)
+    build_model(x_train, x_val, y_train, y_val, estimator, hopt=True, accelerator="gpu")
+    assert estimator.last_param_grid["accelerator"] == "gpu"
+
+
 def test_build_model_without_hopt_attr():
     x_train, x_val, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=False)
@@ -313,6 +321,51 @@ def test_model_factory_wraps_non_milearn_estimators(monkeypatch):
     assert isinstance(wrapped, BagWrapper)
 
 
+def test_model_factory_ignores_accelerator_for_non_milearn_estimators(monkeypatch):
+    class DummyEstimator:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+        def fit(self, x, y):
+            return self
+
+        def predict(self, x):
+            return x
+
+    class DummyModule:
+        pass
+
+    DummyModule.DummyEstimator = DummyEstimator
+    monkeypatch.setattr(lazy_mod, "import_module", lambda module_name: DummyModule())
+
+    factory = lazy_mod.model_factory("sklearn.dummy", "DummyEstimator")
+    wrapped = factory(accelerator="gpu")
+
+    assert isinstance(wrapped, BagWrapper)
+    # accelerator must never reach a non-milearn (e.g. sklearn) estimator's constructor
+    assert "accelerator" not in wrapped.estimator.kwargs
+
+
+def test_model_factory_passes_accelerator_to_milearn_estimators(monkeypatch):
+    class DummyMilearnEstimator:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+    class DummyModule:
+        pass
+
+    DummyModule.DummyMilearnEstimator = DummyMilearnEstimator
+    monkeypatch.setattr(lazy_mod, "import_module", lambda module_name: DummyModule())
+
+    factory = lazy_mod.model_factory("milearn.network.regressor", "DummyMilearnEstimator")
+
+    default_instance = factory()
+    assert "accelerator" not in default_instance.kwargs
+
+    gpu_instance = factory(accelerator="gpu")
+    assert gpu_instance.kwargs["accelerator"] == "gpu"
+
+
 # ---------------------------------------------------------------------------
 # LazyMIL.__init__
 # ---------------------------------------------------------------------------
@@ -320,6 +373,21 @@ def test_model_factory_wraps_non_milearn_estimators(monkeypatch):
 def test_lazymil_init_default_creates_temp_dir():
     lazy = LazyMIL()
     assert os.path.isdir(lazy.output_folder)
+
+
+def test_lazymil_accelerator_defaults_to_cpu():
+    lazy = LazyMIL()
+    assert lazy.accelerator == "cpu"
+
+
+def test_lazymil_accelerator_explicit_override(tmp_path):
+    lazy = LazyMIL(output_folder=str(tmp_path / "out"), accelerator="gpu")
+    assert lazy.accelerator == "gpu"
+
+
+def test_lazymil_accelerator_rejects_invalid_value(tmp_path):
+    with pytest.raises(ValueError, match="cpu.*gpu"):
+        LazyMIL(output_folder=str(tmp_path / "out"), accelerator="auto")
 
 
 def test_lazymil_init_explicit_new_path(tmp_path):
@@ -457,6 +525,21 @@ def test_lazymil_run_splits_reproducibly_with_seed(monkeypatch, tmp_path):
     assert list(train_a["SMILES"]) != list(train_b["SMILES"])
 
 
+def test_lazymil_run_threads_accelerator_into_estimator_construction(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    mock = MockEstimator(supports_hopt=False)
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": mock})
+
+    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y = [1.1, 2.2, 3.3, 4.4, 5.5]
+    lazy = LazyMIL(
+        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
+    )
+    lazy.run(smiles, y)
+
+    assert mock.accelerator == "gpu"
+
+
 def test_lazymil_run_stores_mean_fallback_for_regression(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
     monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
@@ -493,7 +576,9 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
 
     smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
     y = [1.1, 2.2, 3.3, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy = LazyMIL(
+        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
+    )
     lazy.run(smiles, y)
     assert lazy.is_trained is True
 
@@ -501,6 +586,7 @@ def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
     lazy.save(model_path)
 
     loaded = LazyMIL.load(model_path, output_folder=str(tmp_path / "loaded_out"))
+    assert loaded.accelerator == "gpu"
 
     def _should_not_retrain(*args, **kwargs):
         raise AssertionError("predict path retrained a model")
@@ -530,6 +616,47 @@ def test_lazymil_predict_imputes_failed_molecules_with_fallback(monkeypatch, tmp
     captured = capsys.readouterr()
     assert "1 molecule(s) could not be processed" in captured.out
     assert "not_a_valid_smiles!!!" in captured.out
+
+
+def test_lazymil_predict_uses_own_accelerator_by_default_and_allows_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y = [1.1, 3.3, 2.2, 4.4, 5.5]
+    lazy = LazyMIL(
+        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
+    )
+    lazy.run(smiles, y)
+
+    seen = []
+    original = lazy._ensure_estimator_predict_ready
+
+    def spy(estimator, accelerator):
+        seen.append(accelerator)
+        return original(estimator, accelerator)
+
+    monkeypatch.setattr(lazy, "_ensure_estimator_predict_ready", spy)
+
+    lazy.predict(["CCO"])
+    assert seen == ["gpu"]  # falls back to the trained model's own accelerator
+
+    seen.clear()
+    lazy.predict(["CCO"], accelerator="cpu")
+    assert seen == ["cpu"]  # per-call override wins
+
+
+def test_lazymil_predict_rejects_invalid_accelerator_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
+
+    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y = [1.1, 3.3, 2.2, 4.4, 5.5]
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.run(smiles, y)
+
+    with pytest.raises(ValueError, match="cpu.*gpu"):
+        lazy.predict(["CCO"], accelerator="auto")
 
 
 def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
@@ -628,10 +755,10 @@ def test_lazymil_ensure_estimator_predict_ready_returns_early(
         estimator._trainer = trainer
 
     lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=False)
-    lazy._ensure_estimator_predict_ready(estimator)
+    lazy._ensure_estimator_predict_ready(estimator, "cpu")
 
 
-def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer(
+def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer_with_given_accelerator(
     monkeypatch, tmp_path, capsys
 ):
     calls = {}
@@ -645,7 +772,7 @@ def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer(
 
     estimator = Estimator()
     estimator._trainer = None
-    estimator.hparams = types.SimpleNamespace(max_epochs=7, accelerator="cpu")
+    estimator.hparams = types.SimpleNamespace(max_epochs=7)
 
     monkeypatch.setitem(
         __import__("sys").modules,
@@ -654,10 +781,11 @@ def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer(
     )
 
     lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=True)
-    lazy._ensure_estimator_predict_ready(estimator)
+    lazy._ensure_estimator_predict_ready(estimator, "gpu")
 
     assert isinstance(estimator._trainer, FakeTrainer)
     assert calls["kwargs"]["max_epochs"] == 7
+    assert calls["kwargs"]["accelerator"] == "gpu"
     assert calls["kwargs"]["deterministic"] is True
     # Rebuilding the trainer is silent - no raw hparams dump to the console.
     assert capsys.readouterr().out == ""

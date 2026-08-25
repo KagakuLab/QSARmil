@@ -92,6 +92,92 @@ def test_init_default_creates_temp_dir():
     model = MultiConformerRegressor()
     assert os.path.isdir(model.output_folder)
     assert model.seed == 42
+    assert model.accelerator == "cpu"
+
+
+def test_init_rejects_invalid_accelerator(tmp_path):
+    try:
+        MultiConformerRegressor(output_folder=str(tmp_path / "out"), accelerator="auto")
+        assert False, "should reject anything other than 'cpu'/'gpu'"
+    except ValueError as e:
+        assert "cpu" in str(e) and "gpu" in str(e)
+
+
+def test_train_threads_accelerator_into_lazy_model(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
+
+    model = MultiConformerRegressor(
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
+    )
+    model.train(smiles_train, y_train)
+
+    assert model._lazy_model.accelerator == "gpu"
+
+
+def test_predict_accelerator_override_is_forwarded_to_lazy_model(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
+
+    model = MultiConformerRegressor(
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
+    )
+    model.train(smiles_train, y_train)
+
+    seen = []
+    original = model._lazy_model.predict
+
+    def spy(smiles, save=False, accelerator=None):
+        seen.append(accelerator)
+        return original(smiles, save=save, accelerator=accelerator)
+
+    monkeypatch.setattr(model._lazy_model, "predict", spy)
+
+    model.predict(["CCF"])
+    assert seen == [None]  # no override given - LazyMIL falls back to its own "gpu"
+
+    model.predict(["CCF"], accelerator="cpu")
+    assert seen == [None, "cpu"]
+
+
+def test_load_accelerator_override_updates_lazy_model_default(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
+
+    model = MultiConformerRegressor(
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "train_out"), verbose=False,
+        accelerator="gpu",
+    )
+    model.train(smiles_train, y_train)
+    model_path = tmp_path / "model.pkl"
+    model.save(model_path)
+
+    loaded = MultiConformerRegressor.load(model_path, output_folder=str(tmp_path / "pred_out"), accelerator="cpu")
+
+    assert loaded.accelerator == "cpu"
+    assert loaded._lazy_model.accelerator == "cpu"
+
+
+def test_load_without_override_keeps_training_time_accelerator(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
+
+    model = MultiConformerRegressor(
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "train_out"), verbose=False,
+        accelerator="gpu",
+    )
+    model.train(smiles_train, y_train)
+    model_path = tmp_path / "model.pkl"
+    model.save(model_path)
+
+    loaded = MultiConformerRegressor.load(model_path, output_folder=str(tmp_path / "pred_out"))
+
+    assert loaded.accelerator == "gpu"
+    assert loaded._lazy_model.accelerator == "gpu"
 
 
 def test_train_then_predict_split_api(monkeypatch, tmp_path, capsys):
