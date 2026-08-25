@@ -6,18 +6,12 @@ from pathlib import Path
 import click
 import pandas as pd
 
-from qsarmil.modelling.meta import MultiConformerClassifier, MultiConformerEstimator, MultiConformerRegressor
+from qsarmil.modelling.meta import MultiConformerClassifier, MultiConformerRegressor
 
 TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiConformerClassifier}
 
 
-@click.group()
-@click.version_option(package_name="qsarmil")
-def cli() -> None:
-    """QSARmil: train and apply multi-conformer multi-instance learning models on SMILES data."""
-
-
-@cli.command()
+@click.command(name="train")
 @click.option(
     "--train-path",
     required=True,
@@ -56,7 +50,7 @@ def cli() -> None:
 )
 @click.option("--seed", default=42, show_default=True, help="Random seed.")
 @click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
-def train(
+def train_command(
     train_path: Path,
     task_type: str,
     output_folder: Path,
@@ -92,60 +86,3 @@ def train(
     model.save(model_path)
 
     click.echo(f"\nModel saved to {model_path}")
-
-
-@cli.command()
-@click.option(
-    "--test-path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="CSV file; first column is SMILES.",
-)
-@click.option(
-    "--model-path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to a model saved by `qsarmil train`.",
-)
-@click.option(
-    "--output-file",
-    required=True,
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the predictions CSV.",
-)
-@click.option(
-    "--accelerator",
-    type=click.Choice(["cpu", "gpu"]),
-    default=None,
-    help="Device to run inference on, overriding the model's training-time choice (e.g. predict on CPU "
-    "for a model trained on GPU). Defaults to whatever it was trained with.",
-)
-@click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
-def predict(
-    test_path: Path,
-    model_path: Path,
-    output_file: Path,
-    accelerator: str | None,
-    verbose: bool,
-) -> None:
-    """Predict on new SMILES using a model saved by `qsarmil train`."""
-
-    df = pd.read_csv(test_path)
-
-    model: MultiConformerEstimator = MultiConformerEstimator.load(model_path)
-    model.verbose = verbose
-    if model._lazy_model is not None:
-        model._lazy_model.verbose = verbose
-
-    preds = model.predict(df.iloc[:, 0].tolist(), accelerator=accelerator)
-
-    out_df = df.copy()
-    out_df["prediction"] = preds
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(output_file, index=False)
-
-    click.echo(f"\nPredictions saved to {output_file}")
-
-
-if __name__ == "__main__":
-    cli()

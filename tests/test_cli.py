@@ -4,6 +4,8 @@ from click.testing import CliRunner
 from conftest import MockEstimator
 
 import qsarmil.cli as cli_mod
+import qsarmil.cli.predict as cli_predict_mod
+import qsarmil.cli.train as cli_train_mod
 import qsarmil.modelling.lazy as lazy_mod
 import qsarmil.modelling.meta as meta_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
@@ -284,13 +286,13 @@ def test_train_quiet_by_default(monkeypatch, tmp_path, regression_csv):
 def test_train_accelerator_choice_is_forwarded(monkeypatch, tmp_path, regression_csv):
     _patch_fast_pipeline(monkeypatch)
     captured_kwargs = {}
-    original_init = cli_mod.MultiConformerRegressor.__init__
+    original_init = cli_train_mod.MultiConformerRegressor.__init__
 
     def spy_init(self, *args, **kwargs):
         captured_kwargs.update(kwargs)
         return original_init(self, *args, **kwargs)
 
-    monkeypatch.setattr(cli_mod.MultiConformerRegressor, "__init__", spy_init)
+    monkeypatch.setattr(cli_train_mod.MultiConformerRegressor, "__init__", spy_init)
 
     runner = CliRunner()
     output_folder = tmp_path / "mcfm"
@@ -361,13 +363,13 @@ def test_predict_accelerator_override_is_forwarded(monkeypatch, tmp_path, regres
     model_path = output_folder / "model.pkl"
 
     seen = []
-    original_predict = cli_mod.MultiConformerEstimator.predict
+    original_predict = cli_predict_mod.MultiConformerEstimator.predict
 
     def spy_predict(self, smiles, save=False, accelerator=None):
         seen.append(accelerator)
         return original_predict(self, smiles, save=save, accelerator=accelerator)
 
-    monkeypatch.setattr(cli_mod.MultiConformerEstimator, "predict", spy_predict)
+    monkeypatch.setattr(cli_predict_mod.MultiConformerEstimator, "predict", spy_predict)
 
     output_file = tmp_path / "predictions.csv"
     result = runner.invoke(
