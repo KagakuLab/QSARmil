@@ -266,15 +266,10 @@ def _print_progress_item(index: int, total: int, label: str, elapsed_min: float,
     print(f"{' ' * len(prefix)}> Finished in {elapsed_min:.2f} min | Memory usage: {mem_gb:.3f} G")
 
 
-def calc_descriptors(
-    conf_list: list[list[Any]],
-    calculator: DescriptorWrapper,
-    verbose: bool = False,
-    col_stats: dict[str, np.ndarray] | None = None,
-) -> tuple[list[np.ndarray], dict[str, np.ndarray]]:
-    """Compute and clean descriptor bags for a list of per-molecule conformer bags."""
+def calc_descriptors(conf_list: list[list[Any]], calculator: DescriptorWrapper) -> list[np.ndarray]:
+    """Compute descriptor bags for a list of per-molecule conformer bags."""
     calculator.verbose = False  # the low-level per-conformer ticker is redundant with LazyMIL's own step progress
-    return calculator.run(conf_list, verbose=verbose, col_stats=col_stats)
+    return calculator.run(conf_list)
 
 def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Min-max scale descriptor bags, fitting the scaler on the train set only.
@@ -390,6 +385,7 @@ class LazyMIL:
         # Populated after ``run`` and reused by ``predict`` for inference-only
         # execution (descriptor generation + estimator.predict only).
         self._trained_models: dict[str, dict[str, Any]] = {}
+        self._fitted_descriptors: dict[str, DescriptorWrapper] = {}
         self._task_type: str | None = None
         self._train_fallback: Any = None
 
@@ -536,22 +532,22 @@ class LazyMIL:
         result_df_train = pd.DataFrame({"SMILES": smi_train, "Y_TRUE": y_train})
         result_df_val = pd.DataFrame({"SMILES": smi_val, "Y_TRUE": y_val})
 
-        # 6. Calculate descriptors for every descriptor set, imputing val
-        #    NaNs with train's own column means.
+        # 6. Calculate descriptors for every descriptor set.
         if self.verbose:
             print_step_header(3, "Descriptor calculation")
 
-        per_descriptor: dict[str, tuple[list[np.ndarray], list[np.ndarray], dict[str, np.ndarray]]] = {}
+        per_descriptor: dict[str, tuple[list[np.ndarray], list[np.ndarray]]] = {}
         for d_i, (desc_name, desc_source) in enumerate(DESCRIPTORS.items(), start=1):
             desc_calc = desc_source()
 
             start = time.time()
-            x_train, col_stats = calc_descriptors(conf_train, desc_calc, verbose=self.verbose)
-            x_val, _ = calc_descriptors(conf_val, desc_calc, verbose=False, col_stats=col_stats)
+            x_train = calc_descriptors(conf_train, desc_calc)
+            x_val = calc_descriptors(conf_val, desc_calc)
             elapsed_min = (time.time() - start) / 60
             mem_gb = psutil.Process().memory_info().rss / (1024**3)
 
-            per_descriptor[desc_name] = (x_train, x_val, col_stats)
+            per_descriptor[desc_name] = (x_train, x_val)
+            self._fitted_descriptors[desc_name] = desc_calc  # remembers its own learned column-drop decision
 
             if self.verbose:
                 _print_progress_item(d_i, len(DESCRIPTORS), f"{desc_name}:", elapsed_min, mem_gb)
@@ -563,7 +559,7 @@ class LazyMIL:
         total_models = len(DESCRIPTORS) * len(estimators_source)
         current_model = 0
 
-        for desc_name, (x_train, x_val, col_stats) in per_descriptor.items():
+        for desc_name, (x_train, x_val) in per_descriptor.items():
             for est_name, factory in estimators_source.items():
                 estimator = factory(accelerator=self.accelerator)
 
@@ -584,7 +580,6 @@ class LazyMIL:
                     "descriptor": desc_name,
                     "estimator": fitted_estimator,
                     "scaler": fitted_scaler,
-                    "col_stats": col_stats,
                 }
 
                 # Write predictions
@@ -622,9 +617,7 @@ class LazyMIL:
         smi_test = list(smiles)
         result_df_test = pd.DataFrame({"SMILES": smi_test})
 
-        descriptor_stats: dict[str, dict[str, np.ndarray]] = {}
-        for model_state in self._trained_models.values():
-            descriptor_stats[model_state["descriptor"]] = model_state["col_stats"]
+        descriptor_names = {model_state["descriptor"] for model_state in self._trained_models.values()}
 
         # Figure out, once, which SMILES need fresh conformers for at least
         # one descriptor (conformer embeddability doesn't depend on the
@@ -632,10 +625,10 @@ class LazyMIL:
         smiles_needing: dict[str, list[str]] = {}
         all_needed: list[str] = []
         seen: set[str] = set()
-        for desc_name in descriptor_stats:
-            if desc_name not in DESCRIPTORS:
+        for desc_name in descriptor_names:
+            if desc_name not in self._fitted_descriptors:
                 raise ValueError(
-                    f"Descriptor '{desc_name}' was used during training but isn't available in current DESCRIPTORS."
+                    f"Descriptor '{desc_name}' was used during training but no fitted calculator was found for it."
                 )
             _, needing = self._get_cached_descriptors(desc_name, smi_test)
             smiles_needing[desc_name] = needing
@@ -664,13 +657,13 @@ class LazyMIL:
                 if smi in failed_smiles:
                     print(f"  > Row {i}: {smi}")
 
-        for desc_name, col_stats in descriptor_stats.items():
+        for desc_name in descriptor_names:
             needing = [smi for smi in smiles_needing[desc_name] if smi not in failed_smiles]
 
             if needing:
-                desc_calc = DESCRIPTORS[desc_name]()
+                desc_calc = self._fitted_descriptors[desc_name]  # reuse training's fitted calculator, not a fresh one
                 confs_subset = [confs_by_smiles[smi] for smi in needing]
-                calculated_test_descs, _ = calc_descriptors(confs_subset, desc_calc, verbose=False, col_stats=col_stats)
+                calculated_test_descs = calc_descriptors(confs_subset, desc_calc)
                 self._cache_descriptor(desc_name, needing, calculated_test_descs)
 
         valid_smi = [smi for smi in smi_test if smi not in failed_smiles]
@@ -717,6 +710,7 @@ class LazyMIL:
             "task_type": self._task_type,
             "train_fallback": self._train_fallback,
             "trained_models": self._trained_models,
+            "fitted_descriptors": self._fitted_descriptors,
         }
         with model_path.open("wb") as f:
             pickle.dump(state, f)
@@ -751,5 +745,6 @@ class LazyMIL:
         model._task_type = state.get("task_type")
         model._train_fallback = state.get("train_fallback")
         model._trained_models = state["trained_models"]
+        model._fitted_descriptors = state.get("fitted_descriptors", {})
         return model
 

@@ -52,13 +52,13 @@ def test_transform_catches_exceptions_and_returns_failed_descriptor(capsys):
     assert "boom" in captured.out
 
 
-def test_run_over_list_reports_progress_and_postprocesses(capsys):
+def test_run_returns_plain_list_of_bags(capsys):
     mols = [Chem.MolFromSmiles("CC"), Chem.MolFromSmiles("CCC")]
     bags = [[m] for m in mols]
     wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0]), verbose=True)
-    results, col_stats = wrapper.run(bags)
+    results = wrapper.run(bags)
+    assert isinstance(results, list)
     assert len(results) == 2
-    assert list(col_stats["keep_mask"]) == [True]
     captured = capsys.readouterr()
     assert "Calculating descriptors:" in captured.out
 
@@ -66,101 +66,31 @@ def test_run_over_list_reports_progress_and_postprocesses(capsys):
 def test_run_quiet():
     bags = [[Chem.MolFromSmiles("CC")]]
     wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0]), verbose=False)
-    results, _ = wrapper.run(bags)
+    results = wrapper.run(bags)
     assert len(results) == 1
 
 
-def test_run_forwards_verbose_and_col_stats_to_postprocess(capsys):
-    bags = [[Chem.MolFromSmiles("CC")]]
-    wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0, np.nan]), verbose=False)
-    results, col_stats = wrapper.run(bags, verbose=True)
-    assert list(col_stats["keep_mask"]) == [True, False]
-    assert "Removed 1 of 2" in capsys.readouterr().out
+def test_run_raises_clear_error_for_failed_descriptor():
+    def broken_transformer(mol, **kw):
+        raise ValueError("boom")
 
-    results_2, reused_stats = wrapper.run(bags, verbose=True, col_stats=col_stats)
-    assert reused_stats is col_stats
-    assert capsys.readouterr().out == ""
+    wrapper = DescriptorWrapper(broken_transformer, verbose=False)
+    with pytest.raises(ValueError, match=r"failed for 1 of 1 molecule\(s\)"):
+        wrapper.run([[Chem.MolFromSmiles("CC")]])
 
 
-# ---------------------------------------------------------------------------
-# postprocess
-# ---------------------------------------------------------------------------
+def test_run_error_message_includes_smiles_and_row():
+    def broken_transformer(mol, **kw):
+        raise ValueError("boom")
 
-def test_postprocess_drops_any_column_with_nan(capsys):
-    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    bags = [
-        np.array([[1.0, np.nan, 3.0], [1.1, 2.2, 3.3]]),
-        np.array([[1.5, 2.5, 3.5], [1.6, 2.6, 3.6]]),
-    ]
-    cleaned, col_stats = wrapper.postprocess(bags, verbose=True)
-
-    assert list(col_stats["keep_mask"]) == [True, False, True]
-    assert cleaned[0].shape == (2, 2)
-    assert cleaned[1].shape == (2, 2)
-
-    captured = capsys.readouterr()
-    assert "Removed 1 of 3" in captured.out
-    assert "column 1: invalid for 1/4 conformers" in captured.out
-
-
-def test_postprocess_treats_extreme_values_as_missing():
-    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    bags = [np.array([[1.0, 1e30], [1.1, 2.2]])]
-    cleaned, col_stats = wrapper.postprocess(bags)
-    assert list(col_stats["keep_mask"]) == [True, False]
-    assert cleaned[0].shape == (2, 1)
-
-
-def test_postprocess_no_removals_is_quiet_even_when_verbose(capsys):
-    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    bags = [np.array([[1.0, 2.0], [1.1, 2.1]])]
-    cleaned, col_stats = wrapper.postprocess(bags, verbose=True)
-    assert list(col_stats["keep_mask"]) == [True, True]
-    assert capsys.readouterr().out == ""
-
-
-def test_postprocess_uses_named_columns_when_available(capsys):
-    class NamedTransformer:
-        columns = ["alpha", "beta"]
-
-    wrapper = DescriptorWrapper(NamedTransformer(), verbose=False)
-    bags = [np.array([[1.0, np.nan]])]
-    wrapper.postprocess(bags, verbose=True)
-    assert "beta: invalid for 1/1 conformers" in capsys.readouterr().out
-
-
-def test_postprocess_reuses_given_col_stats_without_reprinting(capsys):
-    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    train_bags = [np.array([[1.0, np.nan], [1.1, 2.2]])]
-    _, col_stats = wrapper.postprocess(train_bags, verbose=True)
-    capsys.readouterr()  # discard the training-time report
-
-    val_bags = [np.array([[1.5, 9.9]])]
-    cleaned, reused_stats = wrapper.postprocess(val_bags, verbose=True, col_stats=col_stats)
-
-    assert reused_stats is col_stats
-    assert cleaned[0].shape == (1, 1)
-    assert capsys.readouterr().out == ""
-
-
-def test_postprocess_raises_clear_error_for_failed_descriptor():
-    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    ok_bag = np.array([[1.0, 2.0], [1.1, 2.1]])
-    failed = FailedDescriptor([Chem.MolFromSmiles("CCO")])
-    with pytest.raises(ValueError, match=r"failed for 1 of 2 molecule\(s\)"):
-        wrapper.postprocess([ok_bag, failed])
-
-
-def test_postprocess_error_message_includes_smiles_and_row():
-    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    failed = FailedDescriptor([Chem.MolFromSmiles("CCO")])
+    wrapper = DescriptorWrapper(broken_transformer, verbose=False)
     with pytest.raises(ValueError, match=r"Row 0: CCO -> descriptor calculation failed"):
-        wrapper.postprocess([failed])
+        wrapper.run([[Chem.MolFromSmiles("CCO")]])
 
 
-def test_run_raises_clear_error_instead_of_crashing_in_vstack(monkeypatch):
-    """The whole point of postprocess()'s early check: a failed molecule surfaces as this
-    clear error, not as a cryptic np.vstack shape mismatch."""
+def test_run_raises_clear_error_instead_of_crashing_downstream():
+    """One bad molecule surfaces as this clear error immediately, not as a cryptic
+    shape-mismatch error later on when the caller tries to stack/scale the bags."""
 
     def broken_transformer(mol, **kw):
         if mol.GetNumAtoms() == 1:  # fail only for a specific bag
@@ -171,3 +101,72 @@ def test_run_raises_clear_error_instead_of_crashing_in_vstack(monkeypatch):
     bags = [[Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("C")]]
     with pytest.raises(ValueError, match=r"failed for 1 of 2 molecule\(s\)"):
         wrapper.run(bags)
+
+
+# ---------------------------------------------------------------------------
+# Internal NaN/extreme-value column dropping (learned once, reused silently)
+# ---------------------------------------------------------------------------
+
+def test_run_drops_column_with_nan_and_reports_it(capsys):
+    outputs = iter([np.array([1.0, np.nan]), np.array([1.1, 2.2]), np.array([1.5, 2.5])])
+    wrapper = DescriptorWrapper(lambda mol, **kw: next(outputs), verbose=False)
+    bags = [[Chem.MolFromSmiles("CC"), Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("CCC")]]
+
+    results = wrapper.run(bags)
+
+    assert results[0].shape == (2, 1)
+    assert results[1].shape == (1, 1)
+    captured = capsys.readouterr()
+    assert "Removed 1 of 2" in captured.out
+    assert "column 1: invalid for 1/3 conformers" in captured.out
+
+
+def test_run_treats_extreme_values_as_missing():
+    outputs = iter([np.array([1.0, 1e30]), np.array([1.1, 2.2])])
+    wrapper = DescriptorWrapper(lambda mol, **kw: next(outputs), verbose=False)
+    bags = [[Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("CCC")]]
+
+    results = wrapper.run(bags)
+
+    assert results[0].shape == (1, 1)
+    assert results[1].shape == (1, 1)
+
+
+def test_run_no_removals_prints_nothing():
+    wrapper = DescriptorWrapper(lambda mol, **kw: np.array([1.0, 2.0]), verbose=False)
+    bags = [[Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("CCC")]]
+
+    results = wrapper.run(bags)
+
+    assert results[0].shape == (1, 2)
+
+
+def test_run_reuses_learned_keep_mask_on_later_calls_without_reprinting(capsys):
+    """The keep/drop decision is made once (on the first call) and silently reused after -
+    this is what lets train/val/test end up with the same columns without col_stats."""
+
+    outputs_first = iter([np.array([1.0, np.nan]), np.array([1.1, 2.2])])
+    wrapper = DescriptorWrapper(lambda mol, **kw: next(outputs_first), verbose=False)
+    results1 = wrapper.run([[Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("CCC")]])
+    assert results1[0].shape == (1, 1)
+    capsys.readouterr()  # discard the first call's report
+
+    # second call: even if this batch alone would look "clean", the earlier decision still applies
+    outputs_second = iter([np.array([9.0, 9.0])])
+    wrapper.transformer = lambda mol, **kw: next(outputs_second)
+    results2 = wrapper.run([[Chem.MolFromSmiles("CCCC")]])
+
+    assert results2[0].shape == (1, 1)
+    assert capsys.readouterr().out == ""
+
+
+def test_report_removed_columns_uses_named_columns_when_available(capsys):
+    class NamedTransformer:
+        columns = ["alpha", "beta"]
+
+        def __call__(self, mol, **kw):
+            return np.array([1.0, np.nan])
+
+    wrapper = DescriptorWrapper(NamedTransformer(), verbose=False)
+    wrapper.run([[Chem.MolFromSmiles("CC")]])
+    assert "beta: invalid for 1/1 conformers" in capsys.readouterr().out

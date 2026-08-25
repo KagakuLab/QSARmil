@@ -26,6 +26,7 @@ class DescriptorWrapper:
         super().__init__()
         self.transformer = transformer
         self.verbose = verbose
+        self._keep_mask: np.ndarray | None = None
 
     def __call__(self, mols: list[Mol], *args: Any, **kwargs: Any) -> np.ndarray | FailedDescriptor:
         """Compute the raw descriptor bag (one vector per conformer) for a single molecule's bag of conformers."""
@@ -46,10 +47,17 @@ class DescriptorWrapper:
             x = FailedDescriptor(mols)
         return x
 
-    def run(
-        self, list_of_bags: Sequence[list[Mol]], verbose: bool = False, col_stats: dict[str, np.ndarray] | None = None
-    ) -> tuple[list[np.ndarray], dict[str, np.ndarray]]:
-        """Compute descriptors for a list of bags, then clean the result via postprocess()."""
+    def run(self, list_of_bags: Sequence[list[Mol]]) -> list[np.ndarray]:
+        """Compute descriptors for a list of bags, dropping any column that's NaN/extreme for at least one
+        conformer (in any molecule seen so far by this instance) - reported by row and reused automatically
+        on every later call to this same instance, so e.g. train/val/test all end up with the same columns
+        without needing to pass anything extra around.
+
+        Raises:
+            ValueError: If any bag is a :class:`~qsarmil.utils.logging.FailedDescriptor` (descriptor
+                calculation failed for that molecule) - listing exactly which ones and why, rather than
+                letting it surface later as an opaque error somewhere downstream.
+        """
 
         total = len(list_of_bags)
         results = []
@@ -61,64 +69,34 @@ class DescriptorWrapper:
         if self.verbose:
             print(f"Calculating descriptors: {total}/{total}")
 
-        return self.postprocess(results, verbose=verbose, col_stats=col_stats)
-
-    def postprocess(
-        self,
-        bags: list[np.ndarray],
-        verbose: bool = False,
-        col_stats: dict[str, np.ndarray] | None = None,
-    ) -> tuple[list[np.ndarray], dict[str, np.ndarray]]:
-        """Drop any descriptor column that's NaN/extreme for at least one conformer, in any molecule.
-
-        Args:
-            bags (list[np.ndarray]): Per-molecule descriptor matrices (conformers x raw features).
-            verbose (bool): Whether to print which columns were dropped and why (only when computing stats fresh).
-            col_stats (dict, optional): Stats from a prior call, e.g. the training split's, to reuse instead of
-                recomputing.
-
-        Returns:
-            tuple[list[np.ndarray], dict]: ``(cleaned_bags, col_stats)``, where ``col_stats`` is
-            ``{"keep_mask": np.ndarray}``.
-
-        Raises:
-            ValueError: If any bag is a :class:`~qsarmil.utils.logging.FailedDescriptor` (descriptor
-                calculation failed for that molecule) - listing exactly which ones and why, rather than
-                letting it surface later as an opaque ``np.vstack`` shape error.
-        """
-
-        failed = [(i, b) for i, b in enumerate(bags) if isinstance(b, FailedDescriptor)]
+        failed = [(i, b) for i, b in enumerate(results) if isinstance(b, FailedDescriptor)]
         if failed:
             name = type(self.transformer).__name__
             lines = "\n".join(f"  - Row {i}: {b}" for i, b in failed)
             raise ValueError(
-                f"Descriptor calculation with {name} failed for {len(failed)} of {len(bags)} molecule(s):\n{lines}"
+                f"Descriptor calculation with {name} failed for {len(failed)} of {len(results)} molecule(s):\n{lines}"
             )
 
-        stacked = np.vstack(bags).astype(float)
+        stacked = np.vstack(results).astype(float)
         stacked[np.abs(stacked) >= _EXTREME_VALUE_THRESHOLD] = np.nan
 
-        if col_stats is None:
+        if self._keep_mask is None:
             bad_mask = np.isnan(stacked).any(axis=0)
-            keep_mask = ~bad_mask
-
-            if verbose and bad_mask.any():
+            self._keep_mask = ~bad_mask
+            if bad_mask.any():
                 self._report_removed_columns(bad_mask, stacked)
 
-            col_stats = {"keep_mask": keep_mask}
-        else:
-            keep_mask = col_stats["keep_mask"]
-
         cleaned_bags = []
-        for bag in bags:
+        for bag in results:
             bag = np.array(bag, dtype=float)
             bag[np.abs(bag) >= _EXTREME_VALUE_THRESHOLD] = np.nan
-            cleaned_bags.append(bag[:, keep_mask])
+            cleaned_bags.append(bag[:, self._keep_mask])
 
-        return cleaned_bags, col_stats
+        return cleaned_bags
 
     def _report_removed_columns(self, bad_mask: np.ndarray, stacked: np.ndarray) -> None:
-        """Print which descriptor columns were dropped, and why."""
+        """Print which descriptor columns were dropped, and why. Always prints - this isn't gated behind
+        ``verbose``, since it only fires on the rare occasion something is actually wrong."""
 
         name = type(self.transformer).__name__
         columns = getattr(self.transformer, "columns", None)
@@ -132,3 +110,4 @@ class DescriptorWrapper:
             n_bad = int(np.isnan(stacked[:, col_idx]).sum())
             label = columns[col_idx] if columns is not None else f"column {col_idx}"
             print(f"  - {label}: invalid for {n_bad}/{n_conformers} conformers")
+

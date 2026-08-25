@@ -136,24 +136,22 @@ def test_gen_conformers_seed_affects_output():
 def test_calc_descriptors_real():
     conf_list = gen_conformers(["CCO", "c1ccccc1"], num_conf=2, num_cpu=1, verbose=False)
     calc = DescriptorWrapper(RDKitGEOM(), verbose=False)
-    bags, col_stats = calc_descriptors(conf_list, calc, verbose=False)
+    bags = calc_descriptors(conf_list, calc)
     assert len(bags) == 2
     assert bags[0].shape == (2, 11)
 
-    bags_2, _ = calc_descriptors(conf_list, calc, verbose=False, col_stats=col_stats)
+    bags_2 = calc_descriptors(conf_list, calc)
     assert len(bags_2) == 2
 
 
-def test_calc_descriptors_reports_dropped_columns_when_verbose(capsys):
-    calc = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
-    conf_list = [[object()], [object()]]  # transformer ignores its input entirely
-    calc.transformer = lambda mol, **kw: np.array([1.0, np.nan])
+def test_calc_descriptors_suppresses_low_level_ticker(capsys):
+    calc = DescriptorWrapper(lambda mol, **kw: np.array([1.0]), verbose=True)
+    conf_list = [[object()], [object()]]
 
-    bags, col_stats = calc_descriptors(conf_list, calc, verbose=True)
+    calc_descriptors(conf_list, calc)
 
-    assert list(col_stats["keep_mask"]) == [True, False]
-    assert bags[0].shape == (1, 1)
-    assert "Removed 1 of 2" in capsys.readouterr().out
+    assert calc.verbose is False
+    assert capsys.readouterr().out == ""
 
 
 def test_scale_descriptors():
@@ -671,7 +669,7 @@ def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
     # Simulate loading an artifact whose descriptor is unavailable now.
     only_key = next(iter(lazy._trained_models))
     lazy._trained_models[only_key]["descriptor"] = "MissingDescriptor"
-    with pytest.raises(ValueError, match="isn't available"):
+    with pytest.raises(ValueError, match="no fitted calculator was found"):
         lazy.predict(["CCO"])
 
 
@@ -692,9 +690,9 @@ def test_lazymil_predict_silent_when_using_cached_descriptors(tmp_path, capsys):
             "descriptor": "RDKitGEOM",
             "estimator": MockEstimator(supports_hopt=False),
             "scaler": IdentityScaler(),
-            "col_stats": {"keep_mask": np.array([True, True])},
         }
     }
+    lazy._fitted_descriptors = {"RDKitGEOM": DescriptorWrapper(RDKitGEOM(), verbose=False)}
     lazy._cache_descriptor("RDKitGEOM", ["CCO"], [np.array([[0.1, 0.2]])])
 
     lazy.predict(["CCO"])
@@ -705,11 +703,7 @@ def test_lazymil_predict_silent_when_using_cached_descriptors(tmp_path, capsys):
 
 def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "gen_conformers", lambda *args, **kwargs: [np.array([[0.0]])])
-    monkeypatch.setattr(
-        lazy_mod,
-        "calc_descriptors",
-        lambda *args, **kwargs: ([np.array([[0.1, 0.2]])], {"keep_mask": np.array([True, True])}),
-    )
+    monkeypatch.setattr(lazy_mod, "calc_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
 
     class IdentityScaler:
         def transform(self, x):
@@ -727,9 +721,9 @@ def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
             "descriptor": "RDKitGEOM",
             "estimator": BadEstimator(),
             "scaler": IdentityScaler(),
-            "col_stats": {"keep_mask": np.array([True, True])},
         }
     }
+    lazy._fitted_descriptors = {"RDKitGEOM": DescriptorWrapper(RDKitGEOM(), verbose=False)}
 
     with pytest.raises(AttributeError, match="different attribute error"):
         lazy.predict(["CCO"])
