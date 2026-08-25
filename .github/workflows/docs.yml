@@ -2,7 +2,7 @@ name: Build and deploy docs
 
 on:
   push:
-    branches: [public_release_preparation]
+    branches: [main]
     paths:
       - "docs/**"
       - ".github/workflows/docs.yml"
