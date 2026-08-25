@@ -141,3 +141,33 @@ def test_postprocess_reuses_given_col_stats_without_reprinting(capsys):
     assert reused_stats is col_stats
     assert cleaned[0].shape == (1, 1)
     assert capsys.readouterr().out == ""
+
+
+def test_postprocess_raises_clear_error_for_failed_descriptor():
+    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
+    ok_bag = np.array([[1.0, 2.0], [1.1, 2.1]])
+    failed = FailedDescriptor([Chem.MolFromSmiles("CCO")])
+    with pytest.raises(ValueError, match=r"failed for 1 of 2 molecule\(s\)"):
+        wrapper.postprocess([ok_bag, failed])
+
+
+def test_postprocess_error_message_includes_smiles_and_row():
+    wrapper = DescriptorWrapper(lambda mol, **kw: None, verbose=False)
+    failed = FailedDescriptor([Chem.MolFromSmiles("CCO")])
+    with pytest.raises(ValueError, match=r"Row 0: CCO -> descriptor calculation failed"):
+        wrapper.postprocess([failed])
+
+
+def test_run_raises_clear_error_instead_of_crashing_in_vstack(monkeypatch):
+    """The whole point of postprocess()'s early check: a failed molecule surfaces as this
+    clear error, not as a cryptic np.vstack shape mismatch."""
+
+    def broken_transformer(mol, **kw):
+        if mol.GetNumAtoms() == 1:  # fail only for a specific bag
+            raise ValueError("degenerate geometry")
+        return np.array([1.0, 2.0])
+
+    wrapper = DescriptorWrapper(broken_transformer, verbose=False)
+    bags = [[Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("C")]]
+    with pytest.raises(ValueError, match=r"failed for 1 of 2 molecule\(s\)"):
+        wrapper.run(bags)

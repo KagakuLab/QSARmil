@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Union
 
 import joblib
@@ -41,7 +42,7 @@ class RDKitConformerGenerator:
         self,
         num_conf: int = 10,
         e_thresh: float | None = None,
-        num_cpu: int = 1,
+        num_cpu: int = os.cpu_count() or 1,
         verbose: bool = True,
         seed: int = 42,
     ) -> None:

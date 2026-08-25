@@ -49,8 +49,11 @@ class FailedDescriptor:
         self.mol = mol
 
     def __str__(self) -> str:
-        """Return a human-readable error message."""
-        smi = Chem.MolToSmiles(self.mol)
+        """Return a human-readable error message, using the first conformer's SMILES if given a whole bag."""
+        mol = self.mol
+        if isinstance(mol, list):
+            mol = mol[0] if mol else None
+        smi = Chem.MolToSmiles(mol) if mol is not None else "?"
         return f"{smi} -> descriptor calculation failed"
 
 

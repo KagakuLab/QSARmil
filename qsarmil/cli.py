@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import click
@@ -43,7 +44,9 @@ def cli() -> None:
 )
 @click.option("--num-conf", default=10, show_default=True, help="Number of conformers to generate per molecule.")
 @click.option("--hopt", type=bool, default=False, show_default=True, help="Hyperparameter-tune each estimator.")
-@click.option("--num-cpu", default=20, show_default=True, help="Number of CPU threads for conformer generation.")
+@click.option(
+    "--num-cpu", default=os.cpu_count() or 1, show_default=True, help="Number of CPU threads for conformer generation."
+)
 @click.option(
     "--accelerator",
     type=click.Choice(["cpu", "gpu"]),

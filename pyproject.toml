@@ -8,7 +8,7 @@ version = "1.0.5"
 description = "Molecular multi-instance machine learning"
 readme = { file = "README.rst", content-type = "text/x-rst" }
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
   { name = "Dmitry Zankov", email = "dvzankov@gmail.com" }
 ]
@@ -33,7 +33,7 @@ dev = ["ruff", "mypy", "pytest", "pytest-cov", "ipython"]
 where = ["."]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 files = ["qsarmil"]
 ignore_missing_imports = true
 
@@ -49,4 +49,4 @@ fail_under = 100
 exclude_lines = ["if __name__ == .__main__.:"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"

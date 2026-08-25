@@ -29,7 +29,7 @@ class MultiConformerEstimator:
         self,
         num_conf: int = 10,
         hopt: bool = False,
-        num_cpu: int = 20,
+        num_cpu: int = os.cpu_count() or 1,
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,

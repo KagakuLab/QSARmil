@@ -80,7 +80,20 @@ class DescriptorWrapper:
         Returns:
             tuple[list[np.ndarray], dict]: ``(cleaned_bags, col_stats)``, where ``col_stats`` is
             ``{"keep_mask": np.ndarray}``.
+
+        Raises:
+            ValueError: If any bag is a :class:`~qsarmil.utils.logging.FailedDescriptor` (descriptor
+                calculation failed for that molecule) - listing exactly which ones and why, rather than
+                letting it surface later as an opaque ``np.vstack`` shape error.
         """
+
+        failed = [(i, b) for i, b in enumerate(bags) if isinstance(b, FailedDescriptor)]
+        if failed:
+            name = type(self.transformer).__name__
+            lines = "\n".join(f"  - Row {i}: {b}" for i, b in failed)
+            raise ValueError(
+                f"Descriptor calculation with {name} failed for {len(failed)} of {len(bags)} molecule(s):\n{lines}"
+            )
 
         stacked = np.vstack(bags).astype(float)
         stacked[np.abs(stacked) >= _EXTREME_VALUE_THRESHOLD] = np.nan

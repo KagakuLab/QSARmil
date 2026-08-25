@@ -33,6 +33,18 @@ def test_failed_descriptor_str():
     assert str(fd) == "CCO -> descriptor calculation failed"
 
 
+def test_failed_descriptor_str_with_bag_uses_first_conformer():
+    """DescriptorWrapper actually stores the whole bag (list[Mol]), not a single Mol."""
+    bag = [Chem.MolFromSmiles("CCO"), Chem.MolFromSmiles("CCO")]
+    fd = FailedDescriptor(bag)
+    assert str(fd) == "CCO -> descriptor calculation failed"
+
+
+def test_failed_descriptor_str_with_empty_bag():
+    fd = FailedDescriptor([])
+    assert str(fd) == "? -> descriptor calculation failed"
+
+
 def test_output_suppressor_suppresses_and_restores(capsys):
     print("before")
     with OutputSuppressor():

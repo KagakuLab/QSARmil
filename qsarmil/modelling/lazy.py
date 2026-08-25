@@ -151,7 +151,7 @@ DEFAULT_PARAM_GRID = {
     "verbose": False,
     "hidden_layer_sizes": [(2048, 1024, 512, 256, 128, 64), (256, 128, 64), (128,)],
     "activation": ["relu", "leakyrelu", "gelu", "elu", "silu"],
-    "learning_rate": [10e-5, 10e-4],
+    "learning_rate": [1e-4, 1e-3],
 }
 
 # ==========================================================
@@ -159,7 +159,7 @@ DEFAULT_PARAM_GRID = {
 # ==========================================================
 
 def gen_conformers(
-    smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = 1, verbose: bool = False, seed: int = 42
+    smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = os.cpu_count() or 1, verbose: bool = False, seed: int = 42
 ) -> list[list[Any] | FailedMolecule | FailedConformer]:
     """Generate conformers per SMILES; unparseable/failed-embedding molecules become Failed* sentinels, not raises."""
     mol_list = []
@@ -351,7 +351,7 @@ class LazyMIL:
         self,
         hopt: bool = True,
         num_conf: int = 10,
-        num_cpu: int = 20,
+        num_cpu: int = os.cpu_count() or 1,
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
