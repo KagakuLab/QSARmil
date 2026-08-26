@@ -28,13 +28,8 @@ TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiCo
     "--output-folder",
     required=True,
     type=click.Path(file_okay=False, path_type=Path),
-    help="Directory for the trained model and intermediate files.",
-)
-@click.option(
-    "--model-path",
-    default=None,
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to save the trained model [default: <output-folder>/model.pkl].",
+    help="Directory for the trained model and intermediate files - this is also what you pass to `qsarmil "
+    "predict --model-folder` later.",
 )
 @click.option("--num-conf", default=10, show_default=True, help="Number of conformers to generate per molecule.")
 @click.option("--hopt", type=bool, default=False, show_default=True, help="Hyperparameter-tune each estimator.")
@@ -54,7 +49,6 @@ def train_command(
     train_path: Path,
     task_type: str,
     output_folder: Path,
-    model_path: Path | None,
     num_conf: int,
     hopt: bool,
     num_cpu: int,
@@ -81,8 +75,6 @@ def train_command(
         accelerator=accelerator,
     )
     model.train(smiles, y)
+    model.save()
 
-    model_path = model_path or (output_folder / "model.pkl")
-    model.save(model_path)
-
-    click.echo(f"\nModel saved to {model_path}")
+    click.echo(f"\nModel saved to {output_folder}")

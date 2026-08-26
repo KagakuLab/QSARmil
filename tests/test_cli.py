@@ -82,8 +82,8 @@ def test_train_then_predict_regression(monkeypatch, tmp_path, regression_csv):
         ],
     )
     assert result.exit_code == 0, result.output
-    model_path = output_folder / "model.pkl"
-    assert model_path.exists()
+    assert (output_folder / "estimator.pkl").exists()
+    assert (output_folder / "models.pkl").exists()
     assert "Model saved to" in result.output
 
     output_file = tmp_path / "predictions.csv"
@@ -93,8 +93,8 @@ def test_train_then_predict_regression(monkeypatch, tmp_path, regression_csv):
             "predict",
             "--test-path",
             str(regression_csv),
-            "--model-path",
-            str(model_path),
+            "--model-folder",
+            str(output_folder),
             "--output-file",
             str(output_file),
         ],
@@ -131,8 +131,7 @@ def test_train_then_predict_classification(monkeypatch, tmp_path, classification
         ],
     )
     assert result.exit_code == 0, result.output
-    model_path = output_folder / "model.pkl"
-    assert model_path.exists()
+    assert (output_folder / "estimator.pkl").exists()
 
     output_file = tmp_path / "predictions.csv"
     result = runner.invoke(
@@ -141,8 +140,8 @@ def test_train_then_predict_classification(monkeypatch, tmp_path, classification
             "predict",
             "--test-path",
             str(classification_csv),
-            "--model-path",
-            str(model_path),
+            "--model-folder",
+            str(output_folder),
             "--output-file",
             str(output_file),
         ],
@@ -151,35 +150,6 @@ def test_train_then_predict_classification(monkeypatch, tmp_path, classification
     out_df = pd.read_csv(output_file)
     assert "prediction" in out_df.columns
     assert len(out_df) == 5
-
-
-def test_train_custom_model_path(monkeypatch, tmp_path, regression_csv):
-    _patch_fast_pipeline(monkeypatch)
-    runner = CliRunner()
-    output_folder = tmp_path / "mcfm"
-    custom_model_path = tmp_path / "custom.pickle"
-
-    result = runner.invoke(
-        cli_mod.cli,
-        [
-            "train",
-            "--train-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(output_folder),
-            "--model-path",
-            str(custom_model_path),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert custom_model_path.exists()
-    assert not (output_folder / "model.pkl").exists()
 
 
 def test_train_hopt_accepts_bool_value(monkeypatch, tmp_path, regression_csv):
@@ -206,7 +176,7 @@ def test_train_hopt_accepts_bool_value(monkeypatch, tmp_path, regression_csv):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert (output_folder / "model.pkl").exists()
+    assert (output_folder / "estimator.pkl").exists()
 
 
 def test_train_missing_columns_raises(tmp_path):
@@ -360,7 +330,6 @@ def test_predict_accelerator_override_is_forwarded(monkeypatch, tmp_path, regres
         ],
     )
     assert result.exit_code == 0, result.output
-    model_path = output_folder / "model.pkl"
 
     seen = []
     original_predict = cli_predict_mod.MultiConformerEstimator.predict
@@ -378,8 +347,8 @@ def test_predict_accelerator_override_is_forwarded(monkeypatch, tmp_path, regres
             "predict",
             "--test-path",
             str(regression_csv),
-            "--model-path",
-            str(model_path),
+            "--model-folder",
+            str(output_folder),
             "--output-file",
             str(output_file),
             "--accelerator",
@@ -388,6 +357,23 @@ def test_predict_accelerator_override_is_forwarded(monkeypatch, tmp_path, regres
     )
     assert result.exit_code == 0, result.output
     assert seen == ["cpu"]
+
+
+def test_predict_missing_model_folder_raises(monkeypatch, tmp_path, regression_csv):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "predict",
+            "--test-path",
+            str(regression_csv),
+            "--model-folder",
+            str(tmp_path / "does_not_exist"),
+            "--output-file",
+            str(tmp_path / "predictions.csv"),
+        ],
+    )
+    assert result.exit_code != 0
 
 
 def test_cli_help_and_version():

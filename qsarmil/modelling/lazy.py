@@ -8,7 +8,6 @@ import shutil
 import tempfile
 import time
 from importlib import import_module
-from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -340,7 +339,13 @@ def build_model(
 
 
 class LazyMIL:
-    """Train every built-in descriptor/estimator combination on one dataset; use predict() for new data."""
+    """Train every built-in descriptor/estimator combination on one dataset; use predict() for new data.
+
+    Trained estimators are streamed straight to disk (``{output_folder}/models.pkl``) as each one finishes,
+    rather than kept in memory - training all 9 descriptor types x 8 estimators means ~72 fitted models, and
+    only a handful are typically needed afterward (e.g. by a consensus search), so keeping every one resident
+    in memory for the whole run doesn't scale. Descriptor calculators, being far cheaper, are kept normally.
+    """
 
     def __init__(
         self,
@@ -382,25 +387,23 @@ class LazyMIL:
             shutil.rmtree(self.output_folder)
         os.makedirs(self.output_folder)
 
-        # Populated after ``run`` and reused by ``predict`` for inference-only
-        # execution (descriptor generation + estimator.predict only).
-        self._trained_models: dict[str, dict[str, Any]] = {}
+        # Populated by run(); reused by predict(). The ~72 fitted estimators
+        # themselves are never held here - see models_path().
         self._fitted_descriptors: dict[str, DescriptorWrapper] = {}
         self._task_type: str | None = None
         self._train_fallback: Any = None
-
-        # Descriptor cache: persistent storage for computed descriptors
-        # DataFrame with columns: descriptor_name, SMILES, descriptor_vector
-        self._descriptor_cache_path = os.path.join(self.output_folder, "descriptor_cache.pkl")
-        self._descriptor_cache: pd.DataFrame = pd.DataFrame(
-            columns=["descriptor_name", "SMILES", "descriptor_vector"]
-        )
+        self._n_trained_models = 0
 
     @property
     def is_trained(self) -> bool:
-        """Whether this instance has serialized-ready fitted model artifacts."""
+        """Whether :meth:`run` has produced at least one trained model."""
 
-        return bool(self._trained_models)
+        return self._n_trained_models > 0
+
+    def models_path(self) -> str:
+        """Path to the file holding every trained (estimator, scaler) pair, one appended per model."""
+
+        return os.path.join(self.output_folder, "models.pkl")
 
     def _ensure_estimator_predict_ready(self, estimator_instance: Any, accelerator: str) -> None:
         """Rebuild a milearn estimator's runtime trainer (on ``accelerator``) after unpickling."""
@@ -429,53 +432,6 @@ class LazyMIL:
             deterministic=True,
         )
 
-    def _load_descriptor_cache(self) -> None:
-        """Load descriptor cache from disk if it exists."""
-        if os.path.exists(self._descriptor_cache_path):
-            loaded_data = pd.read_pickle(self._descriptor_cache_path)
-            if isinstance(loaded_data, pd.DataFrame):
-                self._descriptor_cache = loaded_data
-            else:
-                raise ValueError("Descriptor cache file not in the right format.")
-        else:
-            self._descriptor_cache = pd.DataFrame(
-                columns=["descriptor_name", "SMILES", "descriptor_vector"]
-            )
-
-    def _save_descriptor_cache(self) -> None:
-        """Save descriptor cache to disk."""
-        self._descriptor_cache.to_pickle(self._descriptor_cache_path)
-
-    def _get_cached_descriptors(
-        self, desc_name: str, smi_list: list[str]
-    ) -> tuple[list[np.ndarray | None], list[str]]:
-        """Retrieve cached descriptors for the given SMILES, returning found vectors and the still-uncached ones.
-
-        Args:
-            desc_name: Name of the descriptor type.
-            smi_list: SMILES strings to look up.
-
-        Returns:
-            tuple: ``(found_vectors, uncached_smiles)``.
-        """
-        smi_mask = self._descriptor_cache["SMILES"].isin(smi_list)
-        mask = (self._descriptor_cache["descriptor_name"] == desc_name) & (
-            smi_mask
-        )
-        results = self._descriptor_cache.loc[mask, :]
-        not_found = [x for x in smi_list if x not in results["SMILES"].values]
-        return results["descriptor_vector"], not_found
-
-    def _cache_descriptor(self, desc_name: str, smi: list[str], descriptor: list[np.ndarray]) -> None:
-        """Store a descriptor in cache using DataFrame append."""
-        new_row = pd.DataFrame({
-            "descriptor_name": len(smi) * [desc_name],
-            "SMILES": smi,
-            "descriptor_vector": descriptor,
-        })
-        self._descriptor_cache = pd.concat([self._descriptor_cache, new_row], ignore_index=True)
-        self._save_descriptor_cache()
-
     def run(self, smiles: Sequence[str], y: Sequence[Any]) -> None:
         """Train every descriptor/estimator combination and write predictions to CSV.
 
@@ -484,11 +440,9 @@ class LazyMIL:
             y (Sequence[Any]): Target property value for each SMILES, same length and order as ``smiles``.
 
         Returns:
-            None. Writes ``train.csv``/``val.csv`` to ``self.output_folder``; use :meth:`predict` for new data.
+            None. Writes ``train.csv``/``val.csv`` and ``models.pkl`` to ``self.output_folder``; use
+            :meth:`predict` for new data.
         """
-
-        # Reset previous fitted artifacts for a fresh training run.
-        self._trained_models = {}
 
         smi_all, y_all = list(smiles), list(y)
 
@@ -537,6 +491,7 @@ class LazyMIL:
             print_step_header(3, "Descriptor calculation")
 
         per_descriptor: dict[str, tuple[list[np.ndarray], list[np.ndarray]]] = {}
+        self._fitted_descriptors = {}
         for d_i, (desc_name, desc_source) in enumerate(DESCRIPTORS.items(), start=1):
             desc_calc = desc_source()
 
@@ -552,48 +507,59 @@ class LazyMIL:
             if self.verbose:
                 _print_progress_item(d_i, len(DESCRIPTORS), f"{desc_name}:", elapsed_min, mem_gb)
 
-        # 7. Train every descriptor/estimator combination.
+        # 7. Train every descriptor/estimator combination, streaming each
+        #    fitted model straight to disk instead of keeping it in memory.
         if self.verbose:
             print_step_header(4, "Individual model building")
 
         total_models = len(DESCRIPTORS) * len(estimators_source)
         current_model = 0
+        self._n_trained_models = 0
 
-        for desc_name, (x_train, x_val) in per_descriptor.items():
-            for est_name, factory in estimators_source.items():
-                estimator = factory(accelerator=self.accelerator)
+        with open(self.models_path(), "wb") as models_file:
+            for desc_name, (x_train, x_val) in per_descriptor.items():
+                for est_name, factory in estimators_source.items():
+                    estimator = factory(accelerator=self.accelerator)
 
-                model_name = f"{desc_name}|{est_name}"
-                current_model += 1
+                    model_name = f"{desc_name}|{est_name}"
+                    current_model += 1
 
-                start = time.time()
-                with OutputSuppressor():
-                    pred_train, pred_val, fitted_estimator, fitted_scaler = build_model(
-                        x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
-                        accelerator=self.accelerator,
+                    start = time.time()
+                    with OutputSuppressor():
+                        pred_train, pred_val, fitted_estimator, fitted_scaler = build_model(
+                            x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
+                            accelerator=self.accelerator,
+                        )
+                    elapsed_min = (time.time() - start) / 60
+                    mem_gb = psutil.Process().memory_info().rss / (1024**3)
+
+                    pickle.dump(
+                        {
+                            "model_name": model_name,
+                            "descriptor": desc_name,
+                            "estimator": fitted_estimator,
+                            "scaler": fitted_scaler,
+                        },
+                        models_file,
                     )
-                elapsed_min = (time.time() - start) / 60
-                mem_gb = psutil.Process().memory_info().rss / (1024**3)
+                    self._n_trained_models += 1
+                    del fitted_estimator, fitted_scaler  # don't keep this model resident once it's on disk
 
-                # Persist everything needed for inference-only execution.
-                self._trained_models[model_name] = {
-                    "descriptor": desc_name,
-                    "estimator": fitted_estimator,
-                    "scaler": fitted_scaler,
-                }
+                    # Write predictions
+                    result_df_train[model_name] = pred_train
+                    result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
 
-                # Write predictions
-                result_df_train[model_name] = pred_train
-                result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
+                    result_df_val[model_name] = pred_val
+                    result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
 
-                result_df_val[model_name] = pred_val
-                result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
-
-                if self.verbose:
-                    _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
+                    if self.verbose:
+                        _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
 
     def predict(self, smiles: Sequence[str], save: bool = False, accelerator: str | None = None) -> pd.DataFrame:
         """Run inference from persisted fitted models, imputing molecules that fail with :attr:`_train_fallback`.
+
+        Descriptors are (re)computed for every descriptor type on every call - this is deliberately not
+        selective, since descriptor calculation is cheap relative to the network predictions that follow.
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
@@ -607,45 +573,16 @@ class LazyMIL:
         """
 
         if not self.is_trained:
-            raise RuntimeError("LazyMIL is not trained. Call `run` or `load` first.")
+            raise RuntimeError("LazyMIL is not trained. Call `run` first.")
 
         accelerator = _validate_accelerator(accelerator if accelerator is not None else self.accelerator)
-
-        # Load existing descriptor cache
-        self._load_descriptor_cache()
 
         smi_test = list(smiles)
         result_df_test = pd.DataFrame({"SMILES": smi_test})
 
-        descriptor_names = {model_state["descriptor"] for model_state in self._trained_models.values()}
-
-        # Figure out, once, which SMILES need fresh conformers for at least
-        # one descriptor (conformer embeddability doesn't depend on the
-        # descriptor type, so this is shared across the loop below).
-        smiles_needing: dict[str, list[str]] = {}
-        all_needed: list[str] = []
-        seen: set[str] = set()
-        for desc_name in descriptor_names:
-            if desc_name not in self._fitted_descriptors:
-                raise ValueError(
-                    f"Descriptor '{desc_name}' was used during training but no fitted calculator was found for it."
-                )
-            _, needing = self._get_cached_descriptors(desc_name, smi_test)
-            smiles_needing[desc_name] = needing
-            for smi in needing:
-                if smi not in seen:
-                    seen.add(smi)
-                    all_needed.append(smi)
-
-        confs_by_smiles: dict[str, Any] = {}
-        if all_needed:
-            confs = gen_conformers(
-                all_needed, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=False, seed=self.seed
-            )
-            confs_by_smiles = dict(zip(all_needed, confs))
-
+        confs = gen_conformers(smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=False, seed=self.seed)
         failed_smiles = {
-            smi for smi, c in confs_by_smiles.items() if isinstance(c, (FailedMolecule, FailedConformer))
+            smi for smi, c in zip(smi_test, confs) if isinstance(c, (FailedMolecule, FailedConformer))
         }
 
         if failed_smiles and self.verbose:
@@ -657,94 +594,39 @@ class LazyMIL:
                 if smi in failed_smiles:
                     print(f"  > Row {i}: {smi}")
 
-        for desc_name in descriptor_names:
-            needing = [smi for smi in smiles_needing[desc_name] if smi not in failed_smiles]
+        valid_smi = [smi for smi, c in zip(smi_test, confs) if smi not in failed_smiles]
+        valid_confs = [c for smi, c in zip(smi_test, confs) if smi not in failed_smiles]
 
-            if needing:
-                desc_calc = self._fitted_descriptors[desc_name]  # reuse training's fitted calculator, not a fresh one
-                confs_subset = [confs_by_smiles[smi] for smi in needing]
-                calculated_test_descs = calc_descriptors(confs_subset, desc_calc)
-                self._cache_descriptor(desc_name, needing, calculated_test_descs)
+        x_by_descriptor: dict[str, list[np.ndarray]] = {}
+        if valid_confs:
+            for desc_name, desc_calc in self._fitted_descriptors.items():
+                x_by_descriptor[desc_name] = calc_descriptors(valid_confs, desc_calc)
 
-        valid_smi = [smi for smi in smi_test if smi not in failed_smiles]
+        with open(self.models_path(), "rb") as models_file:
+            while True:
+                try:
+                    record = pickle.load(models_file)
+                except EOFError:
+                    break
 
-        for model_name, model_state in self._trained_models.items():
-            desc_name = model_state["descriptor"]
-            scaler = model_state["scaler"]
-            estimator = model_state["estimator"]
+                model_name, desc_name = record["model_name"], record["descriptor"]
+                if desc_name not in self._fitted_descriptors:
+                    raise ValueError(
+                        f"Model '{model_name}' references descriptor '{desc_name}', which has no fitted "
+                        "calculator - models.pkl may be out of sync with this LazyMIL's saved state."
+                    )
 
-            preds_by_smi: dict[str, Any] = {}
-            if valid_smi:
-                x_test, missing = self._get_cached_descriptors(desc_name, valid_smi)
-                assert not missing
-                x_test_scaled = scaler.transform(x_test)
-                with OutputSuppressor():
-                    self._ensure_estimator_predict_ready(estimator, accelerator)
-                    preds = estimator.predict(x_test_scaled)
-                preds_by_smi = dict(zip(valid_smi, preds))
+                preds_by_smi: dict[str, Any] = {}
+                if valid_smi:
+                    x_test = x_by_descriptor[desc_name]
+                    x_test_scaled = record["scaler"].transform(x_test)
+                    with OutputSuppressor():
+                        self._ensure_estimator_predict_ready(record["estimator"], accelerator)
+                        preds = record["estimator"].predict(x_test_scaled)
+                    preds_by_smi = dict(zip(valid_smi, preds))
 
-            result_df_test[model_name] = [preds_by_smi.get(smi, self._train_fallback) for smi in smi_test]
+                result_df_test[model_name] = [preds_by_smi.get(smi, self._train_fallback) for smi in smi_test]
 
         if save:
             result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
         return result_df_test
-
-    def save(self, model_path: str | Path) -> None:
-        """Serialize fitted artifacts so future inference skips retraining."""
-
-        if not self.is_trained:
-            raise RuntimeError("LazyMIL is not trained. Nothing to serialize.")
-
-        model_path = Path(model_path)
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-
-        state = {
-            "hopt": self.hopt,
-            "num_conf": self.num_conf,
-            "num_cpu": self.num_cpu,
-            "verbose": self.verbose,
-            "seed": self.seed,
-            "val_size": self.val_size,
-            "task": self.task,
-            "accelerator": self.accelerator,
-            "task_type": self._task_type,
-            "train_fallback": self._train_fallback,
-            "trained_models": self._trained_models,
-            "fitted_descriptors": self._fitted_descriptors,
-        }
-        with model_path.open("wb") as f:
-            pickle.dump(state, f)
-
-    @classmethod
-    def load(cls, model_path: str | Path, output_folder: str | None = None, accelerator: str | None = None) -> LazyMIL:
-        """Load a serialized LazyMIL artifact for inference-only use.
-
-        Args:
-            model_path (str | Path): Path to a file written by :meth:`save`.
-            output_folder (str, optional): Output directory; a fresh temp dir is created if omitted.
-            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to override the accelerator this model was
-                trained with - e.g. load a GPU-trained model but run inference on CPU from now on. Defaults
-                to whatever accelerator was used at training time.
-        """
-
-        model_path = Path(model_path)
-        with model_path.open("rb") as f:
-            state = pickle.load(f)
-
-        model = cls(
-            hopt=state["hopt"],
-            num_conf=state["num_conf"],
-            num_cpu=state["num_cpu"],
-            output_folder=output_folder,
-            verbose=state["verbose"],
-            seed=state["seed"],
-            val_size=state.get("val_size", 0.2),
-            task=state.get("task"),
-            accelerator=accelerator if accelerator is not None else state.get("accelerator", "cpu"),
-        )
-        model._task_type = state.get("task_type")
-        model._train_fallback = state.get("train_fallback")
-        model._trained_models = state["trained_models"]
-        model._fitted_descriptors = state.get("fitted_descriptors", {})
-        return model
-

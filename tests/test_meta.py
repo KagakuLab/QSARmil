@@ -1,8 +1,8 @@
 import os
 import pickle
-from typing import Any, cast
 
 import pandas as pd
+import pytest
 from conftest import MockEstimator
 
 import qsarmil.modelling.lazy as lazy_mod
@@ -91,8 +91,8 @@ def test_classifier_forces_binary(monkeypatch, tmp_path):
 def test_init_default_creates_temp_dir():
     model = MultiConformerRegressor()
     assert os.path.isdir(model.output_folder)
-    assert model.seed == 42
-    assert model.accelerator == "cpu"
+    assert model._lazy_model.seed == 42
+    assert model._lazy_model.accelerator == "cpu"
 
 
 def test_init_rejects_invalid_accelerator(tmp_path):
@@ -152,12 +152,10 @@ def test_load_accelerator_override_updates_lazy_model_default(monkeypatch, tmp_p
         accelerator="gpu",
     )
     model.train(smiles_train, y_train)
-    model_path = tmp_path / "model.pkl"
-    model.save(model_path)
+    model.save()
 
-    loaded = MultiConformerRegressor.load(model_path, output_folder=str(tmp_path / "pred_out"), accelerator="cpu")
+    loaded = MultiConformerRegressor.load(str(tmp_path / "train_out"), accelerator="cpu")
 
-    assert loaded.accelerator == "cpu"
     assert loaded._lazy_model.accelerator == "cpu"
 
 
@@ -171,13 +169,30 @@ def test_load_without_override_keeps_training_time_accelerator(monkeypatch, tmp_
         accelerator="gpu",
     )
     model.train(smiles_train, y_train)
-    model_path = tmp_path / "model.pkl"
-    model.save(model_path)
+    model.save()
 
-    loaded = MultiConformerRegressor.load(model_path, output_folder=str(tmp_path / "pred_out"))
+    loaded = MultiConformerRegressor.load(str(tmp_path / "train_out"))
 
-    assert loaded.accelerator == "gpu"
     assert loaded._lazy_model.accelerator == "gpu"
+
+
+def test_load_missing_estimator_pkl_raises(tmp_path):
+    with pytest.raises(FileNotFoundError, match="No estimator.pkl found"):
+        MultiConformerRegressor.load(str(tmp_path / "empty_folder"))
+
+
+def test_load_missing_models_pkl_raises(monkeypatch, tmp_path):
+    _patch_fast_pipeline(monkeypatch)
+    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
+    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
+    model.train(smiles_train, y_train)
+    model.save()
+
+    os.remove(tmp_path / "out" / "models.pkl")
+
+    with pytest.raises(FileNotFoundError, match="No models.pkl found"):
+        MultiConformerRegressor.load(str(tmp_path / "out"))
 
 
 def test_train_then_predict_split_api(monkeypatch, tmp_path, capsys):
@@ -265,10 +280,9 @@ def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
         seed=42,
     )
     model.train(smiles_train, y_train)
-    model_path = tmp_path / "model.pkl"
-    model.save(model_path)
+    model.save()
 
-    loaded = MultiConformerRegressor.load(model_path, output_folder=str(tmp_path / "pred_out"))
+    loaded = MultiConformerRegressor.load(str(tmp_path / "train_out"))
     preds = loaded.predict(["CCF"])
     assert isinstance(preds, list)
     assert len(preds) == 1
@@ -278,29 +292,15 @@ def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
     assert len(preds2) == 2
 
 
-def test_predict_fallback_to_run_lazy_when_no_lazy_model(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
+def test_predict_before_train_with_untrained_model_raises(tmp_path):
+    """Even though _lazy_model exists from __init__ onward, predict() still requires train()/load() first."""
+    _ = tmp_path
     model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
     try:
         model.predict(["CCF"])
-        assert False, "predict should fail when lazy model is not trained"
+        assert False, "predict should fail when the model hasn't been trained"
     except RuntimeError:
         assert True
-
-
-def test_predict_raises_when_lazy_model_state_is_not_trained(tmp_path):
-    class FakeLazyMIL:
-        is_trained = False
-
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
-    model.best_consensus = ["RDKitGEOM|Mock"]
-    model._lazy_model = cast(Any, FakeLazyMIL())
-
-    try:
-        model.predict(["CCF"])
-        assert False, "predict should fail when the stored LazyMIL artifact is not trained"
-    except RuntimeError as e:
-        assert "LazyMIL model is not trained" in str(e)
 
 
 def test_predict_fallback_to_mean_when_consensus_predictor_missing(monkeypatch, tmp_path):
@@ -334,13 +334,13 @@ def test_predict_raises_when_consensus_columns_missing(monkeypatch, tmp_path):
 def test_save_before_train_raises(tmp_path):
     model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
     try:
-        model.save(tmp_path / "model.pkl")
+        model.save()
         assert False, "save should fail before train/load"
     except RuntimeError as e:
         assert "not trained" in str(e)
 
 
-def test_save_handles_unpicklable_consensus(monkeypatch, tmp_path):
+def test_save_handles_unpicklable_consensus(monkeypatch, tmp_path, capsys):
     _patch_fast_pipeline(monkeypatch)
     smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
     y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
@@ -348,10 +348,10 @@ def test_save_handles_unpicklable_consensus(monkeypatch, tmp_path):
     model.train(smiles_train, y_train)
 
     model._consensus_search = UnpicklableConsensus()
-    model_path = tmp_path / "model.pkl"
-    model.save(model_path)
+    model.save()
+    assert "could not be serialized" in capsys.readouterr().out
 
-    loaded = MultiConformerRegressor.load(model_path)
+    loaded = MultiConformerRegressor.load(str(tmp_path / "out"))
     assert loaded._consensus_search is None
 
 

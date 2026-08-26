@@ -8,11 +8,13 @@ class RDKitDescriptor3D:
     """Base class to compute 3D molecular descriptors using RDKit."""
 
     def __init__(self, desc_name: str | None = None) -> None:
-        """Look up the RDKit descriptor function to use, if given (subclasses like RDKitGEOM set it themselves)."""
-        super().__init__()
+        """Store the RDKit descriptor function's name, if given (subclasses like RDKitGEOM set it themselves).
 
-        if desc_name:
-            self.transformer = getattr(Descriptors3D.rdMolDescriptors, desc_name)
+        Stores only the name, not the function itself - RDKit's C-extension (Boost.Python) functions aren't
+        picklable, so the actual function is looked up fresh in :meth:`__call__` instead of being cached.
+        """
+        super().__init__()
+        self.desc_name = desc_name
 
     def __call__(self, mol: Mol, conformer_id: int | None = None) -> np.ndarray:
         """Compute the raw, uncleaned 3D descriptor for a molecule and optional conformer.
@@ -24,7 +26,8 @@ class RDKitDescriptor3D:
         Returns:
             np.ndarray: Raw, uncleaned descriptor vector.
         """
-        return np.array(self.transformer(mol, confId=conformer_id))
+        transformer = getattr(Descriptors3D.rdMolDescriptors, self.desc_name)
+        return np.array(transformer(mol, confId=conformer_id))
 
 
 class RDKitGEOM(RDKitDescriptor3D):

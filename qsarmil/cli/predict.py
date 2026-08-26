@@ -16,10 +16,10 @@ from qsarmil.modelling.meta import MultiConformerEstimator
     help="CSV file; first column is SMILES.",
 )
 @click.option(
-    "--model-path",
+    "--model-folder",
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to a model saved by `qsarmil train`.",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Folder saved by `qsarmil train` (the --output-folder you gave it).",
 )
 @click.option(
     "--output-file",
@@ -37,7 +37,7 @@ from qsarmil.modelling.meta import MultiConformerEstimator
 @click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
 def predict_command(
     test_path: Path,
-    model_path: Path,
+    model_folder: Path,
     output_file: Path,
     accelerator: str | None,
     verbose: bool,
@@ -46,10 +46,8 @@ def predict_command(
 
     df = pd.read_csv(test_path)
 
-    model: MultiConformerEstimator = MultiConformerEstimator.load(model_path)
-    model.verbose = verbose
-    if model._lazy_model is not None:
-        model._lazy_model.verbose = verbose
+    model: MultiConformerEstimator = MultiConformerEstimator.load(str(model_folder))
+    model._lazy_model.verbose = verbose
 
     preds = model.predict(df.iloc[:, 0].tolist(), accelerator=accelerator)
 
