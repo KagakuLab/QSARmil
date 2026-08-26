@@ -50,13 +50,6 @@ TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiCo
     show_default=True,
     help="Number of CPU threads for conformer generation.",
 )
-@click.option(
-    "--accelerator",
-    type=click.Choice(["cpu", "gpu"]),
-    default="cpu",
-    show_default=True,
-    help="Training device.",
-)
 @click.option("--seed", default=42, show_default=True, help="Random seed.")
 @click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
 def train_predict_command(
@@ -68,7 +61,6 @@ def train_predict_command(
     num_conf: int,
     hopt: bool,
     num_cpu: int,
-    accelerator: str,
     seed: int,
     verbose: bool,
 ) -> None:
@@ -96,11 +88,8 @@ def train_predict_command(
         output_folder=str(output_folder),
         verbose=verbose,
         seed=seed,
-        accelerator=accelerator,
     )
-    model.train(smiles_train, y_train)
-
-    preds = model.predict(test_df.iloc[:, 0].tolist())
+    preds = model.train_predict(smiles_train, y_train, test_df.iloc[:, 0].tolist())
 
     out_df = test_df.copy()
     out_df["prediction"] = preds

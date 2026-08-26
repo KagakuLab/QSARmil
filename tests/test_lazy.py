@@ -1,8 +1,6 @@
-import csv
 import os
 
 import numpy as np
-import pandas as pd
 import pytest
 from conftest import MockEstimator
 
@@ -35,12 +33,6 @@ def test_parse_smiles_verbose_reports_summary(capsys):
     parse_smiles(["CCO", "not_a_valid_smiles!!!", "c1ccccc1"], verbose=True)
     captured = capsys.readouterr()
     assert "Parsed 2 of 3 SMILES successfully." in captured.out
-
-
-def test_parse_smiles_quiet_by_default():
-    parse_smiles(["not_a_valid_smiles!!!"])
-    # no assertion needed beyond "doesn't raise"; verbosity defaults to off
-    assert True
 
 
 def test_parse_smiles_quiet_prints_nothing(capsys):
@@ -94,7 +86,6 @@ def test_generate_conformers_suppresses_low_level_ticker(capsys):
     its own step-level progress instead."""
     mols = parse_smiles(["CCO"])
     generate_conformers(mols, num_conf=2, num_cpu=1, verbose=True)
-    # only our own one-line summary should appear, never the joblib "Generating conformers: i/n" ticker
     assert "Generating conformers:" not in capsys.readouterr().out
 
 
@@ -132,8 +123,15 @@ def test_scale_descriptors():
     assert len(scaled_test) == 1
 
 
+def test_scale_descriptors_handles_empty_test():
+    x_train = [np.array([[1.0, 2.0], [3.0, 4.0]])]
+    scaled_train, scaled_test = scale_descriptors(x_train, [])
+    assert len(scaled_train) == 1
+    assert list(scaled_test) == []
+
+
 # ---------------------------------------------------------------------------
-# target_fallback / _subset
+# target_fallback
 # ---------------------------------------------------------------------------
 
 def test_target_fallback_continuous_is_mean():
@@ -144,12 +142,6 @@ def test_target_fallback_binary_is_most_common_class():
     assert target_fallback([0, 1, 1, 1, 0], "binary") == 1
 
 
-def test_subset_preserves_index_order():
-    from qsarmil.modelling.lazy import _subset
-
-    assert _subset(["a", "b", "c", "d"], [2, 0]) == ["c", "a"]
-
-
 # ---------------------------------------------------------------------------
 # train_estimator
 # ---------------------------------------------------------------------------
@@ -157,67 +149,65 @@ def test_subset_preserves_index_order():
 def _tiny_bags():
     x_train = [np.array([[1.0, 2.0], [3.0, 4.0]]), np.array([[2.0, 2.0]])]
     x_val = [np.array([[1.5, 2.5]])]
+    x_test = [np.array([[1.2, 2.2]])]
     y_train = [1.0, 2.0]
     y_val = [1.5]
-    return x_train, x_val, y_train, y_val
+    return x_train, x_val, x_test, y_train, y_val
 
 
 def test_train_estimator_with_hopt():
-    x_train, x_val, y_train, y_val = _tiny_bags()
+    x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    pred_train, pred_val, fitted_estimator, fitted_scaler = train_estimator(
-        x_train, x_val, y_train, y_val, estimator, hopt=True, seed=7
+    pred_train, pred_val, pred_test = train_estimator(
+        x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, seed=7
     )
     assert estimator.hopt_called is True
     assert len(pred_train) == 2
     assert len(pred_val) == 1
-    assert hasattr(fitted_estimator, "predict")
-    assert hasattr(fitted_scaler, "transform")
-
-
-def test_train_estimator_forces_accelerator_into_hopt_grid():
-    """The explicit accelerator must win over DEFAULT_PARAM_GRID's own fixed value."""
-    x_train, x_val, y_train, y_val = _tiny_bags()
-    estimator = MockEstimator(supports_hopt=True)
-    train_estimator(x_train, x_val, y_train, y_val, estimator, hopt=True, accelerator="gpu")
-    assert estimator.last_param_grid["accelerator"] == "gpu"
+    assert len(pred_test) == 1
 
 
 def test_train_estimator_without_hopt_attr():
-    x_train, x_val, y_train, y_val = _tiny_bags()
+    x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=False)
     assert not hasattr(estimator, "hopt")
-    pred_train, _, _, _ = train_estimator(x_train, x_val, y_train, y_val, estimator, hopt=True)
+    pred_train, _, _ = train_estimator(x_train, x_val, x_test, y_train, y_val, estimator, hopt=True)
     assert len(pred_train) == 2
 
 
 def test_train_estimator_hopt_false_skips_search():
-    x_train, x_val, y_train, y_val = _tiny_bags()
+    x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    train_estimator(x_train, x_val, y_train, y_val, estimator, hopt=False)
+    train_estimator(x_train, x_val, x_test, y_train, y_val, estimator, hopt=False)
     assert estimator.hopt_called is False
+
+
+def test_train_estimator_empty_test_returns_no_predictions():
+    x_train, x_val, _, y_train, y_val = _tiny_bags()
+    estimator = MockEstimator(supports_hopt=False)
+    _, _, pred_test = train_estimator(x_train, x_val, [], y_train, y_val, estimator, hopt=False)
+    assert pred_test == []
 
 
 def test_train_estimator_with_sklearn_ridge_accepts_pooled_2d():
     from milearn.wrapper import BagWrapper
     from sklearn.linear_model import Ridge
 
-    x_train, x_val, y_train, y_val = _tiny_bags()
+    x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = BagWrapper(Ridge())
-    pred_train, pred_val, fitted_estimator, fitted_scaler = train_estimator(
-        x_train, x_val, y_train, y_val, estimator, hopt=False
+    pred_train, pred_val, pred_test = train_estimator(
+        x_train, x_val, x_test, y_train, y_val, estimator, hopt=False
     )
 
     assert len(pred_train) == len(y_train)
     assert len(pred_val) == len(y_val)
-    assert hasattr(fitted_estimator, "predict")
-    assert hasattr(fitted_scaler, "transform")
+    assert len(pred_test) == len(x_test)
 
 
 def test_train_estimator_hopt_path():
-    x_train, x_val, y_train, y_val = _tiny_bags()
+    x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    train_estimator(x_train, x_val, y_train, y_val, estimator, hopt=True, seed=11)
+    train_estimator(x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, seed=11)
     assert estimator.hopt_called is True
 
 
@@ -257,18 +247,11 @@ def test_default_regressor_and_classifier_factories_resolve():
 
 def test_default_regressor_factories_are_independent_instances():
     """Same reasoning as descriptors: one shared estimator object being retrained/overwritten
-    across every descriptor type would silently corrupt `_trained_models`."""
+    across every descriptor type would silently corrupt the results."""
     from qsarmil.modelling.lazy import REGRESSORS
 
     factory = REGRESSORS["MeanBagNetworkRegressor"]
     assert factory() is not factory()
-
-
-def test_default_regressor_factories_forward_accelerator():
-    from qsarmil.modelling.lazy import REGRESSORS
-
-    est = REGRESSORS["MeanBagNetworkRegressor"](accelerator="cpu")
-    assert getattr(est, "accelerator", "cpu") == "cpu"
 
 
 # ---------------------------------------------------------------------------
@@ -276,29 +259,21 @@ def test_default_regressor_factories_forward_accelerator():
 # ---------------------------------------------------------------------------
 
 def test_lazymil_init_default_creates_temp_dir():
-    lazy = LazyMIL()
+    lazy = LazyMIL(task="continuous")
     assert os.path.isdir(lazy.output_folder)
 
 
-def test_lazymil_accelerator_defaults_to_cpu():
-    lazy = LazyMIL()
-    assert lazy.accelerator == "cpu"
+def test_lazymil_init_sets_estimators_from_task():
+    lazy_reg = LazyMIL(task="continuous")
+    assert lazy_reg.ESTIMATORS is lazy_mod.REGRESSORS
 
-
-def test_lazymil_accelerator_explicit_override(tmp_path):
-    lazy = LazyMIL(output_folder=str(tmp_path / "out"), accelerator="gpu")
-    assert lazy.accelerator == "gpu"
-
-
-def test_lazymil_accelerator_is_not_validated(tmp_path):
-    """LazyMIL no longer validates `accelerator` itself - any value is stored as given."""
-    lazy = LazyMIL(output_folder=str(tmp_path / "out"), accelerator="auto")
-    assert lazy.accelerator == "auto"
+    lazy_clf = LazyMIL(task="binary")
+    assert lazy_clf.ESTIMATORS is lazy_mod.CLASSIFIERS
 
 
 def test_lazymil_init_explicit_new_path(tmp_path):
     target = str(tmp_path / "new_output")
-    lazy = LazyMIL(output_folder=target)
+    lazy = LazyMIL(task="continuous", output_folder=target)
     assert lazy.output_folder == target
     assert os.path.isdir(target)
 
@@ -309,7 +284,7 @@ def test_lazymil_init_wipes_existing_path(tmp_path):
     with open(os.path.join(target, "stale.txt"), "w") as f:
         f.write("stale")
 
-    LazyMIL(output_folder=target)
+    LazyMIL(task="continuous", output_folder=target)
     assert os.path.isdir(target)
     assert not os.path.exists(os.path.join(target, "stale.txt"))
 
@@ -318,113 +293,78 @@ def test_lazymil_init_wipes_existing_path(tmp_path):
 # LazyMIL.run - full flow with fast monkeypatched descriptors/estimators
 # ---------------------------------------------------------------------------
 
-class _IdentityScaler:
-    """Module-level (picklable) stand-in for BagMinMaxScaler."""
-
-    def transform(self, x):
-        return x
-
-
-class _BadEstimator:
-    """Module-level (picklable) estimator that always raises an unrelated AttributeError."""
-
-    def predict(self, x):
-        raise AttributeError("different attribute error")
-
-
 def _fast_descriptors():
     return {"RDKitGEOM": lambda: DescriptorWrapper(RDKitGEOM(), verbose=False)}
 
 
 def test_lazymil_run_continuous_verbose(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
 
-    smiles = ["CCO", "c1ccccc1", "not_a_valid_smiles!!!", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5, 6.6]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True)
-    lazy.run(smiles, y)
+    smi_train = ["CCO", "c1ccccc1", "not_a_valid_smiles!!!", "CCN"]
+    y_train = [1.1, 2.2, 3.3, 4.4]
+    smi_val = ["CCC"]
+    y_val = [5.5]
+    smi_test = ["CCCl"]
 
-    with open(tmp_path / "out" / "train.csv", newline="") as f, open(
-        tmp_path / "out" / "val.csv", newline=""
-    ) as fv:
-        n_train = sum(1 for _ in csv.reader(f)) - 1
-        n_val = sum(1 for _ in csv.reader(fv)) - 1
-    assert n_train + n_val == 5  # the invalid SMILES got dropped, the rest got split
+    lazy = LazyMIL(
+        task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True
+    )
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    result_train, result_val, result_test = lazy.run(smi_train, y_train, smi_val, y_val, smi_test)
+
+    assert len(result_train) == 3  # the invalid SMILES got dropped
+    assert len(result_val) == 1
+    assert len(result_test) == 1  # test rows are never dropped
+    assert "RDKitGEOM|Mock" in result_test.columns
 
     captured = capsys.readouterr()
     assert "Step-1. SMILES parsing" in captured.out
     assert "Step-2. Conformer generation" in captured.out
     assert "Step-3. Descriptor calculation" in captured.out
     assert "Step-4. Model training" in captured.out
-    assert "not_a_valid_smiles!!!" not in captured.out  # no more per-row failure listing
     assert "Parsed 5 of 6 SMILES successfully." in captured.out
-    assert "Generated conformers for 5 of 6 molecules." in captured.out
     assert "RDKitGEOM: done" in captured.out
     assert "[1/1] RDKitGEOM|Mock" in captured.out
-    # progress printing was explicitly simplified - no more timing/memory lines
-    assert "Finished in" not in captured.out
-    assert "Memory usage:" not in captured.out
+    assert (tmp_path / "out" / "train.csv").exists()
+    assert (tmp_path / "out" / "val.csv").exists()
+    assert (tmp_path / "out" / "test.csv").exists()
 
 
 def test_lazymil_run_binary_quiet(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "CLASSIFIERS", {"Mock": MockEstimator(supports_hopt=False)})
 
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [0, 1, 0, 1, 0]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
-
-
-def test_lazymil_run_unsupported_task_type(tmp_path):
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC"]
-    y = ["a", "b", "c", "d"]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    with pytest.raises(ValueError, match="not supported"):
-        lazy.run(smiles, y)
-
-
-def test_lazymil_run_forced_task_skips_autodetection(monkeypatch, tmp_path):
-    """Passing task= bypasses type_of_target, so a 2-value numeric target
-    (which sklearn would call 'binary') still routes to REGRESSORS."""
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-    monkeypatch.setattr(lazy_mod, "CLASSIFIERS", {})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.0, 3.0, 1.0, 3.0, 1.0]  # only 2 distinct values
+    smi_train = ["CCO", "c1ccccc1", "CCN", "CCC"]
+    y_train = [0, 1, 0, 1]
+    smi_val = ["CCCl"]
+    y_val = [0]
 
     lazy = LazyMIL(
-        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, task="continuous"
+        task="binary", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False
     )
-    lazy.run(smiles, y)
-
-    assert lazy._task_type == "continuous"
-    assert "RDKitGEOM|Mock" in lazy._trained_models
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    lazy.run(smi_train, y_train, smi_val, y_val, ["CCF"])
 
 
-def test_lazymil_run_splits_reproducibly_with_seed(monkeypatch, tmp_path):
-    """self.seed reaches the internal train/val split."""
+def test_lazymil_run_splits_are_taken_as_given(monkeypatch, tmp_path):
+    """LazyMIL no longer performs its own train/val split - it trusts the split it's handed."""
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
 
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5]
+    smi_train = ["CCO", "c1ccccc1", "CCN", "CCC"]
+    y_train = [1.1, 2.2, 3.3, 4.4]
+    smi_val = ["CCCl", "CCF"]
+    y_val = [5.5, 6.6]
 
-    lazy_a = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out_a"), verbose=False, seed=1)
-    lazy_b = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out_b"), verbose=False, seed=2)
-    lazy_a.run(smiles, y)
-    lazy_b.run(smiles, y)
+    lazy = LazyMIL(task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    result_train, result_val, _ = lazy.run(smi_train, y_train, smi_val, y_val, [])
 
-    train_a = pd.read_csv(tmp_path / "out_a" / "train.csv")
-    train_b = pd.read_csv(tmp_path / "out_b" / "train.csv")
-    assert list(train_a["SMILES"]) != list(train_b["SMILES"])
+    assert list(result_train["SMILES"]) == smi_train
+    assert list(result_val["SMILES"]) == smi_val
 
 
-def test_lazymil_run_descriptors_calculated_once_before_split(monkeypatch, tmp_path):
-    """Descriptors are computed for the whole surviving dataset exactly once, before the
-    train/val split - not once per split (which would double the work)."""
+def test_lazymil_run_descriptors_calculated_once_across_splits(monkeypatch, tmp_path):
+    """Descriptors are computed for train+val+test together in one call per descriptor type,
+    not once per split."""
     calls = []
 
     real_calculate_descriptors = lazy_mod.calculate_descriptors
@@ -434,129 +374,69 @@ def test_lazymil_run_descriptors_calculated_once_before_split(monkeypatch, tmp_p
         return real_calculate_descriptors(conf_list, calculator)
 
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
     monkeypatch.setattr(lazy_mod, "calculate_descriptors", _counting_calculate_descriptors)
 
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
+    smi_train = ["CCO", "c1ccccc1", "CCN"]
+    y_train = [1.1, 2.2, 3.3]
+    smi_val = ["CCC"]
+    y_val = [4.4]
+    smi_test = ["CCCl", "CCF"]
 
-    # one call, covering every surviving molecule - not two calls (train-sized + val-sized)
-    assert calls == [len(smiles)]
+    lazy = LazyMIL(task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    lazy.run(smi_train, y_train, smi_val, y_val, smi_test)
+
+    # one call, covering every molecule across all three splits
+    assert calls == [len(smi_train) + len(smi_val) + len(smi_test)]
 
 
-def test_lazymil_run_threads_accelerator_into_estimator_construction(monkeypatch, tmp_path):
+def test_lazymil_run_test_predictions_use_fallback_for_failed_molecules(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    mock = MockEstimator(supports_hopt=False)
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": mock})
 
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5]
+    smi_train = ["CCO", "c1ccccc1", "CCN", "CCC"]
+    y_train = [1.1, 3.3, 2.2, 4.4]
+    smi_val = ["CCCl"]
+    y_val = [5.5]
+    smi_test = ["CCF", "not_a_valid_smiles!!!"]
+
     lazy = LazyMIL(
-        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
+        task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True
     )
-    lazy.run(smiles, y)
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    _, _, result_test = lazy.run(smi_train, y_train, smi_val, y_val, smi_test)
 
-    assert mock.accelerator == "gpu"
-
-
-def test_lazymil_run_stores_mean_fallback_for_regression(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 3.3, 2.2, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
-
-    assert lazy._train_fallback == pytest.approx(sum(y) / len(y))
-
-
-def test_lazymil_run_stores_mode_fallback_for_classification(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "CLASSIFIERS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [0, 1, 1, 1, 0]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
-
-    assert lazy._train_fallback == 1
-
-
-def test_lazymil_predict_before_train_raises(tmp_path):
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    with pytest.raises(RuntimeError, match="not trained"):
-        lazy.predict(["CCO"])
-
-
-def test_lazymil_predict_reuses_same_process_trained_models(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
-    assert lazy.is_trained is True
-
-    def _should_not_retrain(*args, **kwargs):
-        raise AssertionError("predict path retrained a model")
-
-    monkeypatch.setattr(lazy_mod, "train_estimator", _should_not_retrain)
-
-    pred_df = lazy.predict(["CCCl", "CCF"], save=True)
-    assert len(pred_df) == 2
-    assert "RDKitGEOM|Mock" in pred_df.columns
-    assert os.path.exists(tmp_path / "out" / "test.csv")
-
-
-def test_lazymil_predict_imputes_failed_molecules_with_fallback(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 3.3, 2.2, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True)
-    lazy.run(smiles, y)
-
-    pred_df = lazy.predict(["CCO", "not_a_valid_smiles!!!"])
-
-    assert len(pred_df) == 2
-    assert pred_df["RDKitGEOM|Mock"].iloc[1] == pytest.approx(lazy._train_fallback)
+    assert len(result_test) == 2  # test rows are never dropped, even on failure
+    fallback = target_fallback(y_train, "continuous")
+    assert result_test["RDKitGEOM|Mock"].iloc[1] == pytest.approx(fallback)
 
     captured = capsys.readouterr()
-    assert "1 molecule(s) could not be processed" in captured.out
-    assert "not_a_valid_smiles!!!" in captured.out
+    assert "1 test molecule(s) could not be processed" in captured.out
 
 
-def test_lazymil_predict_silent_when_nothing_fails(monkeypatch, tmp_path, capsys):
+def test_lazymil_run_test_predictions_silent_when_nothing_fails(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
 
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True)
-    lazy.run(smiles, y)
-    capsys.readouterr()  # discard training output
+    smi_train = ["CCO", "c1ccccc1", "CCN", "CCC"]
+    y_train = [1.1, 2.2, 3.3, 4.4]
+    smi_val = ["CCCl"]
+    y_val = [5.5]
 
-    lazy.predict(["CCO"])
+    lazy = LazyMIL(
+        task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True
+    )
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    lazy.run(smi_train, y_train, smi_val, y_val, ["CCF"])
 
-    # predict() should stay silent unless a molecule actually fails.
-    assert capsys.readouterr().out == ""
+    assert "could not be processed" not in capsys.readouterr().out
 
 
-def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "parse_smiles", lambda *args, **kwargs: [object()])
-    monkeypatch.setattr(lazy_mod, "generate_conformers", lambda *args, **kwargs: [[object()]])
-    monkeypatch.setattr(lazy_mod, "calculate_descriptors", lambda *args, **kwargs: [np.array([[0.1, 0.2]])])
+def test_lazymil_run_empty_test_set(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
 
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy._fitted_descriptors = {"RDKitGEOM": DescriptorWrapper(RDKitGEOM(), verbose=False)}
-    lazy._trained_models = {
-        "RDKitGEOM|Mock": {"descriptor": "RDKitGEOM", "estimator": _BadEstimator(), "scaler": _IdentityScaler()}
-    }
-
-    with pytest.raises(AttributeError, match="different attribute error"):
-        lazy.predict(["CCO"])
+    lazy = LazyMIL(task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    _, _, result_test = lazy.run(
+        ["CCO", "c1ccccc1", "CCN", "CCC"], [1.1, 2.2, 3.3, 4.4], ["CCCl"], [5.5], []
+    )
+    assert len(result_test) == 0
+    assert list(result_test.columns) == ["SMILES", "RDKitGEOM|Mock"]

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import os
-import time
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-import pandas as pd
-import psutil
 from qsarcons.consensus import GeneticSearch
 from rdkit import RDLogger
+from sklearn.model_selection import train_test_split
 
 from qsarmil.modelling.lazy import LazyMIL
-from qsarmil.utils.logging import print_step_header
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -18,10 +16,9 @@ RDLogger.DisableLog("rdApp.*")
 class MultiConformerEstimator:
     """Shared LazyMIL + consensus-search pipeline behind MultiConformerRegressor/MultiConformerClassifier.
 
-    All the training/inference settings (``num_conf``, ``hopt``, ``accelerator``, etc.) live on the
-    ``LazyMIL`` this builds in :meth:`__init__` - this class itself only owns the consensus-search result.
-    Train and predict within the same process/session - there's no serialization; use :meth:`train` then
-    :meth:`predict` in one run.
+    All the training/inference settings (``num_conf``, ``hopt``, etc.) live on the ``LazyMIL`` this
+    builds in :meth:`__init__` - this class itself only owns the consensus-search result. There's no
+    serialization and no separate predict() step: :meth:`train_predict` does everything in one call.
     """
 
     _task: str | None = None
@@ -35,7 +32,6 @@ class MultiConformerEstimator:
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
-        accelerator: str = "cpu",
     ) -> None:
         """Build the underlying LazyMIL with these settings; see :class:`~qsarmil.modelling.lazy.LazyMIL`.
 
@@ -46,20 +42,19 @@ class MultiConformerEstimator:
             output_folder (str, optional): Directory for the model's files; a fresh temp dir is created if omitted.
             verbose (bool): Whether to print progress from the underlying steps.
             seed (int): Random seed for the train/val split and everything LazyMIL seeds internally.
-            accelerator (str): ``"cpu"`` or ``"gpu"`` - an explicit choice, never auto-detected.
         """
         super().__init__()
 
+        self.seed = seed
+        self.verbose = verbose
         self._lazy_model = LazyMIL(
+            task=self._task,
             num_conf=num_conf,
             hopt=hopt,
             num_cpu=num_cpu,
             output_folder=output_folder,
             verbose=verbose,
             seed=seed,
-            val_size=self._val_size,
-            task=self._task,
-            accelerator=accelerator,
         )
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None
@@ -70,65 +65,49 @@ class MultiConformerEstimator:
 
         return self._lazy_model.output_folder
 
-    @property
-    def is_trained(self) -> bool:
-        """Whether :meth:`train` has produced a reusable consensus."""
-
-        return bool(self.best_consensus)
-
-    def train(self, smiles: Sequence[str], y: Sequence[Any]) -> MultiConformerEstimator:
-        """Train/model-select once and cache everything required for later prediction.
+    def train_predict(self, smiles_train: Sequence[str], y_train: Sequence[Any], smiles_test: Sequence[str]) -> list[Any]:
+        """Train, select a genetic model consensus, and predict on new SMILES - all in one call.
 
         Args:
-            smiles (Sequence[str]): Training SMILES strings.
-            y (Sequence[Any]): Target property value for each SMILES, same length/order as ``smiles``.
+            smiles_train (Sequence[str]): Training SMILES strings.
+            y_train (Sequence[Any]): Target property value for each SMILES, same length/order as
+                ``smiles_train``. Internally split into train/validation.
+            smiles_test (Sequence[str]): SMILES strings to predict on.
 
         Returns:
-            MultiConformerEstimator: This instance, now containing trained state.
+            list: Predicted property value for each input SMILES, same order as ``smiles_test``.
         """
 
-        self._lazy_model.run(smiles, y)
+        smi_train_all, y_train_all = list(smiles_train), list(y_train)
+        idx_train, idx_val = train_test_split(
+            range(len(smi_train_all)), test_size=self._val_size, random_state=self.seed
+        )
+        smi_train = [smi_train_all[i] for i in idx_train]
+        y_train_split = [y_train_all[i] for i in idx_train]
+        smi_val = [smi_train_all[i] for i in idx_val]
+        y_val = [y_train_all[i] for i in idx_val]
 
-        res_val = pd.read_csv(f"{self.output_folder}/val.csv")
-        x_val, true_val = res_val.iloc[:, 2:], res_val.iloc[:, 1]
+        _, result_df_val, result_df_test = self._lazy_model.run(
+            smi_train, y_train_split, smi_val, y_val, list(smiles_test)
+        )
 
-        if self._lazy_model.verbose:
-            print_step_header(5, "Genetic model consensus search")
+        x_val, true_val = result_df_val.iloc[:, 2:], result_df_val.iloc[:, 1]
 
-        start = time.time()
+        if self.verbose:
+            print("Step-5. Genetic model consensus search")
+
         cons_search = GeneticSearch(cons_size="auto", n_iter=50)
         best_cons = cons_search.run(x_val, true_val)
-        elapsed_min = (time.time() - start) / 60
-        mem_gb = psutil.Process().memory_info().rss / (1024**3)
 
         self.best_consensus = list(best_cons)
         self._consensus_search = cons_search
 
-        if self._lazy_model.verbose:
-            print(f"> Finished in {elapsed_min:.2f} min | Memory usage: {mem_gb:.3f} G")
-            print("> Best genetic consensus:")
+        if self.verbose:
+            print("Best genetic consensus:")
             for name in self.best_consensus:
-                print(f"       -{name}")
+                print(f"  -{name}")
 
-        return self
-
-    def predict(self, smiles: Sequence[str], save: bool = False) -> list[Any]:
-        """Predict for new SMILES using the stored trained state.
-
-        Args:
-            smiles (Sequence[str]): SMILES strings to predict on.
-            save (bool): Whether to also write LazyMIL's per-model predictions to ``test.csv``.
-
-        Returns:
-            list: Predicted property value for each input SMILES, same order as ``smiles``.
-        """
-
-        if not self.is_trained:
-            raise RuntimeError("Model is not trained. Call `train` first.")
-
-        res_test = self._lazy_model.predict(smiles, save=save)
-        x_test = res_test.iloc[:, 1:]
-
+        x_test = result_df_test.iloc[:, 1:]
         missing_cols = [c for c in self.best_consensus if c not in x_test.columns]
         if missing_cols:
             raise ValueError("Consensus references missing model columns: " + ", ".join(missing_cols))

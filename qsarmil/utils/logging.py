@@ -57,21 +57,6 @@ class FailedDescriptor:
         return f"{smi} -> descriptor calculation failed"
 
 
-def print_step_header(step: int, title: str, bar_width: int = 26) -> None:
-    """Print a ``+---+ / Step-N. Title / +---+`` banner for a pipeline stage.
-
-    Args:
-        step (int): Step number to display (e.g. ``1``).
-        title (str): Short label for the step (e.g. ``"SMILES parsing"``).
-        bar_width (int): Number of ``+`` characters in the banner rule.
-    """
-
-    bar = "+" * bar_width
-    print(f"\n{bar}")
-    print(f"Step-{step}. {title}")
-    print(bar)
-
-
 class OutputSuppressor:
     """Context manager that silences all stdout/stderr/logging output while it's open, nestably and thread-safely."""
 

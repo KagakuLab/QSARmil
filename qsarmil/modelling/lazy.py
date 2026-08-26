@@ -36,10 +36,8 @@ from molfeat.calc import ElectroShapeDescriptors, Pharmacophore3D, USRDescriptor
 
 from milearn.preprocessing import BagMinMaxScaler
 from rdkit import Chem, RDLogger
-from sklearn.model_selection import train_test_split
-from sklearn.utils.multiclass import type_of_target
 
-from qsarmil.utils.logging import FailedConformer, FailedMolecule, OutputSuppressor, print_step_header
+from qsarmil.utils.logging import FailedConformer, FailedMolecule, OutputSuppressor
 
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
@@ -65,61 +63,34 @@ DESCRIPTORS: dict[str, Callable[[], DescriptorWrapper]] = {
 
 # Same reasoning as DESCRIPTORS above: factories, not instances, so every run() call and every
 # descriptor gets its own fresh estimator rather than 9 descriptors overwriting one shared model.
-REGRESSORS: dict[str, Callable[..., Any]] = {
+# No accelerator to thread through either - every estimator trains on CPU by default.
+REGRESSORS: dict[str, Callable[[], Any]] = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkRegressor": lambda accelerator="cpu": InstanceWrapperMLPNetworkRegressor(
-        pool="mean", accelerator=accelerator
-    ),
-    "MeanBagWrapperMLPNetworkRegressor": lambda accelerator="cpu": BagWrapperMLPNetworkRegressor(
-        pool="mean", accelerator=accelerator
-    ),
+    "MeanInstanceWrapperMLPNetworkRegressor": lambda: InstanceWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanBagWrapperMLPNetworkRegressor": lambda: BagWrapperMLPNetworkRegressor(pool="mean"),
     # mil networks
-    "MeanBagNetworkRegressor": lambda accelerator="cpu": BagNetworkRegressor(pool="mean", accelerator=accelerator),
-    "MeanInstanceNetworkRegressor": lambda accelerator="cpu": InstanceNetworkRegressor(
-        pool="mean", accelerator=accelerator
-    ),
-    "AdditiveAttentionNetworkRegressor": lambda accelerator="cpu": AdditiveAttentionNetworkRegressor(
-        accelerator=accelerator
-    ),
-    "SelfAttentionNetworkRegressor": lambda accelerator="cpu": SelfAttentionNetworkRegressor(
-        accelerator=accelerator
-    ),
-    "HopfieldAttentionNetworkRegressor": lambda accelerator="cpu": HopfieldAttentionNetworkRegressor(
-        accelerator=accelerator
-    ),
-    "DynamicPoolingNetworkRegressor": lambda accelerator="cpu": DynamicPoolingNetworkRegressor(
-        accelerator=accelerator
-    ),
+    "MeanBagNetworkRegressor": lambda: BagNetworkRegressor(pool="mean"),
+    "MeanInstanceNetworkRegressor": lambda: InstanceNetworkRegressor(pool="mean"),
+    "AdditiveAttentionNetworkRegressor": lambda: AdditiveAttentionNetworkRegressor(),
+    "SelfAttentionNetworkRegressor": lambda: SelfAttentionNetworkRegressor(),
+    "HopfieldAttentionNetworkRegressor": lambda: HopfieldAttentionNetworkRegressor(),
+    "DynamicPoolingNetworkRegressor": lambda: DynamicPoolingNetworkRegressor(),
 }
 
-CLASSIFIERS: dict[str, Callable[..., Any]] = {
+CLASSIFIERS: dict[str, Callable[[], Any]] = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkClassifier": lambda accelerator="cpu": InstanceWrapperMLPNetworkClassifier(
-        pool="mean", accelerator=accelerator
-    ),
-    "MeanBagWrapperMLPNetworkClassifier": lambda accelerator="cpu": BagWrapperMLPNetworkClassifier(
-        pool="mean", accelerator=accelerator
-    ),
+    "MeanInstanceWrapperMLPNetworkClassifier": lambda: InstanceWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanBagWrapperMLPNetworkClassifier": lambda: BagWrapperMLPNetworkClassifier(pool="mean"),
     # mil networks
-    "MeanBagNetworkClassifier": lambda accelerator="cpu": BagNetworkClassifier(pool="mean", accelerator=accelerator),
-    "MeanInstanceNetworkClassifier": lambda accelerator="cpu": InstanceNetworkClassifier(
-        pool="mean", accelerator=accelerator
-    ),
-    "AdditiveAttentionNetworkClassifier": lambda accelerator="cpu": AdditiveAttentionNetworkClassifier(
-        accelerator=accelerator
-    ),
-    "SelfAttentionNetworkClassifier": lambda accelerator="cpu": SelfAttentionNetworkClassifier(
-        accelerator=accelerator
-    ),
-    "HopfieldAttentionNetworkClassifier": lambda accelerator="cpu": HopfieldAttentionNetworkClassifier(
-        accelerator=accelerator
-    ),
-    "DynamicPoolingNetworkClassifier": lambda accelerator="cpu": DynamicPoolingNetworkClassifier(
-        accelerator=accelerator
-    ),
+    "MeanBagNetworkClassifier": lambda: BagNetworkClassifier(pool="mean"),
+    "MeanInstanceNetworkClassifier": lambda: InstanceNetworkClassifier(pool="mean"),
+    "AdditiveAttentionNetworkClassifier": lambda: AdditiveAttentionNetworkClassifier(),
+    "SelfAttentionNetworkClassifier": lambda: SelfAttentionNetworkClassifier(),
+    "HopfieldAttentionNetworkClassifier": lambda: HopfieldAttentionNetworkClassifier(),
+    "DynamicPoolingNetworkClassifier": lambda: DynamicPoolingNetworkClassifier(),
 }
 
-DEFAULT_PARAM_GRID = {
+HYPERPARAMETERS = {
     # Fixed hparams
     "max_epochs": 1000,
     "early_stopping": True,
@@ -153,7 +124,7 @@ def parse_smiles(smi_list: Iterable[str], verbose: bool = False) -> list[Any]:
 
     if verbose:
         n_failed = sum(isinstance(m, FailedMolecule) for m in mol_list)
-        print(f"> Parsed {len(mol_list) - n_failed} of {len(mol_list)} SMILES successfully.")
+        print(f"Parsed {len(mol_list) - n_failed} of {len(mol_list)} SMILES successfully.")
 
     return mol_list
 
@@ -186,7 +157,7 @@ def generate_conformers(
 
     if verbose:
         n_ok = sum(isinstance(c, list) for c in conf_list)
-        print(f"> Generated conformers for {n_ok} of {len(conf_list)} molecules.")
+        print(f"Generated conformers for {n_ok} of {len(conf_list)} molecules.")
 
     return conf_list
 
@@ -210,12 +181,6 @@ def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tu
     scaler = BagMinMaxScaler()
     scaler.fit(x_train)
     return scaler.transform(x_train), scaler.transform(x_test)
-
-
-def _subset(items: Sequence[Any], idx: Sequence[int]) -> list[Any]:
-    """Pick out ``items[i]`` for each ``i`` in ``idx``, preserving ``idx``'s order."""
-
-    return [items[i] for i in idx]
 
 
 def target_fallback(y: Iterable[Any], task_type: str) -> Any:
@@ -242,28 +207,31 @@ def target_fallback(y: Iterable[Any], task_type: str) -> Any:
 def train_estimator(
     x_train: list[np.ndarray],
     x_val: list[np.ndarray],
+    x_test: list[np.ndarray],
     y_train: Iterable[Any],
     y_val: Iterable[Any],
     estimator_instance: Any,
     hopt: bool = True,
     seed: int = 42,
-    accelerator: str = "cpu",
-) -> tuple[list[Any], list[Any], Any, BagMinMaxScaler]:
-    """Fit one estimator and refit on train+val, returning predictions and the artifacts to persist.
+) -> tuple[list[Any], list[Any], list[Any]]:
+    """Fit one estimator, refit on train+val, and predict on train/val/test - all in one call.
+
+    There's nothing left over to persist afterward: the estimator and its scaler are local to this
+    call, since predictions for every split are produced right here instead of via a later predict().
 
     Args:
         x_train (list[np.ndarray]): Training descriptor bags.
         x_val (list[np.ndarray]): Validation descriptor bags.
+        x_test (list[np.ndarray]): Descriptor bags to predict on; may be empty.
         y_train (array-like): Training targets.
         y_val (array-like): Validation targets.
         estimator_instance: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
         hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting, if supported.
         seed (int): Random seed passed to the estimator's hyperparameter search.
-        accelerator (str): ``"cpu"``/``"gpu"``, forced into the hopt search grid so it
-            can't be silently overridden by ``DEFAULT_PARAM_GRID``'s own fixed value.
 
     Returns:
-        tuple: ``(pred_train, pred_val, fitted_estimator, fitted_scaler)`` from the final train+val refit.
+        tuple: ``(pred_train, pred_val, pred_test)``. ``pred_train``/``pred_val`` come from the
+        train-only fit; ``pred_test`` comes from the final train+val refit (empty if ``x_test`` is).
     """
 
     # 1. Scale train/val descriptors
@@ -271,7 +239,7 @@ def train_estimator(
 
     # 2. Optimize hyperparameters
     if hopt and hasattr(estimator_instance, "hopt"):
-        param_grid = {**DEFAULT_PARAM_GRID, "random_seed": seed, "accelerator": accelerator}
+        param_grid = {**HYPERPARAMETERS, "random_seed": seed}
         estimator_instance.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
 
     # 3. Train on train split only (not final training yet)
@@ -279,241 +247,184 @@ def train_estimator(
     pred_train = list(estimator_instance.predict(x_train_scaled))
     pred_val = list(estimator_instance.predict(x_val_scaled))
 
-    # 4. Retrain model on full (train + val) - this is the artifact that
-    #    gets persisted for later inference.
-    x_full, y_full = x_train + x_val, np.hstack((y_train, y_val))
-    scaler_full = BagMinMaxScaler()
-    scaler_full.fit(x_full)
-    x_full_scaled = scaler_full.transform(x_full)
+    # 4. Retrain on the full train+val set and predict on test with that same fit.
+    x_full = x_train + x_val
+    y_full = np.hstack((y_train, y_val))
+    x_full_scaled, x_test_scaled = scale_descriptors(x_full, x_test)
     estimator_instance.fit(x_full_scaled, y_full)
+    pred_test = list(estimator_instance.predict(x_test_scaled)) if x_test else []
 
-    return pred_train, pred_val, estimator_instance, scaler_full
+    return pred_train, pred_val, pred_test
 
 
 class LazyMIL:
-    """Train every built-in descriptor/estimator combination on one dataset; use predict() for new data.
+    """Train every built-in descriptor/estimator combination and predict on train/val/test in one pass.
 
-    Trains, then predicts, within the same process/session - there's no serialization; all fitted models
-    and descriptor calculators are kept in memory for the lifetime of this object.
+    Everything happens inside a single call to :meth:`run` - there's no serialization and no separate
+    predict() step, so nothing about a trained model is kept around afterward.
     """
 
     def __init__(
         self,
+        task: str,
         hopt: bool = True,
         num_conf: int = 10,
         num_cpu: int = os.cpu_count() or 1,
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
-        val_size: float = 0.2,
-        task: str | None = None,
-        accelerator: str = "cpu",
     ) -> None:
         """Store settings and (re)create the output folder.
 
         Args:
+            task (str): ``"continuous"`` or ``"binary"`` - selects REGRESSORS or CLASSIFIERS. Always
+                supplied by the caller (:class:`~qsarmil.modelling.meta.MultiConformerEstimator`
+                already knows its own task), so this isn't validated here.
             hopt (bool): Whether to hyperparameter-tune each estimator before fitting, if supported.
             num_conf (int): Number of conformers to generate per molecule.
             num_cpu (int): Number of CPU threads to use for conformer generation.
             output_folder (str, optional): Output directory; a fresh temp dir is created and wiped if omitted/exists.
             verbose (bool): Whether to print per-step progress.
-            seed (int): Random seed for embedding, validation, the train/val split, and hyperparameter search.
-            val_size (float): Fraction of the data held out as a random validation split inside :meth:`run`.
-            task (str, optional): ``"continuous"`` or ``"binary"`` to force the task, skipping auto-detection.
-            accelerator (str): ``"cpu"`` or ``"gpu"``, passed straight through to the underlying estimators.
-                Used for training in :meth:`run`; :meth:`predict` can override it per call.
+            seed (int): Random seed for embedding and hyperparameter search.
         """
+        self.task = task
+        self.ESTIMATORS = REGRESSORS if task == "continuous" else CLASSIFIERS
         self.hopt = hopt
         self.num_conf = num_conf
         self.output_folder: str = output_folder or tempfile.mkdtemp(prefix="qsarmil_")
         self.num_cpu = num_cpu
         self.verbose = verbose
         self.seed = seed
-        self.val_size = val_size
-        self.task = task
-        self.accelerator = accelerator
 
         if os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
         os.makedirs(self.output_folder)
 
-        # Populated by run(); reused by predict() within the same process -
-        # no persistence to disk, so nothing here survives past this object.
-        self._trained_models: dict[str, dict[str, Any]] = {}
-        self._fitted_descriptors: dict[str, DescriptorWrapper] = {}
-        self._task_type: str | None = None
-        self._train_fallback: Any = None
+    def run(
+        self,
+        smiles_train: Sequence[str],
+        y_train: Sequence[Any],
+        smiles_val: Sequence[str],
+        y_val: Sequence[Any],
+        smiles_test: Sequence[str],
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Train every descriptor/estimator combination and predict on train/val/test in one pass.
 
-    @property
-    def is_trained(self) -> bool:
-        """Whether :meth:`run` has produced at least one trained model."""
-
-        return bool(self._trained_models)
-
-    def run(self, smiles: Sequence[str], y: Sequence[Any]) -> None:
-        """Train every descriptor/estimator combination and write predictions to CSV.
-
-        Pipeline: parse SMILES, generate conformers, calculate descriptors for the whole dataset,
-        then split into train/validation, then train every descriptor/estimator combination.
+        Pipeline: parse SMILES, generate conformers, and calculate descriptors for train+val+test
+        together (one pass per descriptor type, for efficiency), then train every descriptor/estimator
+        combination and predict on all three splits at once.
 
         Args:
-            smiles (Sequence[str]): SMILES strings.
-            y (Sequence[Any]): Target property value for each SMILES, same length and order as ``smiles``.
+            smiles_train (Sequence[str]): Training SMILES strings.
+            y_train (Sequence[Any]): Training targets, same length/order as ``smiles_train``.
+            smiles_val (Sequence[str]): Validation SMILES strings.
+            y_val (Sequence[Any]): Validation targets, same length/order as ``smiles_val``.
+            smiles_test (Sequence[str]): SMILES strings to predict on. Every row is kept in the
+                output; molecules that fail parsing/conformer generation are imputed with the
+                training set fallback rather than dropped.
 
         Returns:
-            None. Writes ``train.csv``/``val.csv`` to ``self.output_folder``; use :meth:`predict` for new data.
+            tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: ``(result_df_train, result_df_val,
+            result_df_test)`` - each a ``SMILES`` column (train/val also get ``Y_TRUE``) plus one
+            prediction column per descriptor/estimator combination. Also written to
+            ``train.csv``/``val.csv``/``test.csv`` in ``self.output_folder``.
         """
 
-        smi_all, y_all = list(smiles), list(y)
+        smi_train, y_train = list(smiles_train), list(y_train)
+        smi_val, y_val = list(smiles_val), list(y_val)
+        smi_test = list(smiles_test)
 
         # 1. Parse SMILES.
         if self.verbose:
-            print_step_header(1, "SMILES parsing")
+            print("Step-1. SMILES parsing")
+        smi_all = smi_train + smi_val + smi_test
         mols_all = parse_smiles(smi_all, verbose=self.verbose)
 
         # 2. Generate conformers.
         if self.verbose:
-            print_step_header(2, "Conformer generation")
+            print("Step-2. Conformer generation")
         conf_all = generate_conformers(
             mols_all, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
         )
+        n_train, n_val = len(smi_train), len(smi_val)
+        conf_train = conf_all[:n_train]
+        conf_val = conf_all[n_train : n_train + n_val]
+        conf_test = conf_all[n_train + n_val :]
 
-        keep_idx = [i for i, c in enumerate(conf_all) if isinstance(c, list)]
-        smi_all, y_all, conf_all = _subset(smi_all, keep_idx), _subset(y_all, keep_idx), _subset(conf_all, keep_idx)
+        # Train/val: drop molecules that failed - training needs clean data.
+        ok_train = [i for i, c in enumerate(conf_train) if isinstance(c, list)]
+        smi_train = [smi_train[i] for i in ok_train]
+        y_train = [y_train[i] for i in ok_train]
+        conf_train = [conf_train[i] for i in ok_train]
 
-        # 3. Get a task type and cache the fallback prediction (mean / most frequent class over
-        #    the whole dataset) used by `predict` for molecules it can't process later.
-        task_type = self.task if self.task is not None else type_of_target(y_all)
-        if task_type == "continuous":
-            estimators_source = REGRESSORS
-        elif task_type == "binary":
-            estimators_source = CLASSIFIERS
-        else:
-            raise ValueError(
-                f"Task type '{task_type}' not supported (only 'continuous' and 'binary' targets are supported)."
+        ok_val = [i for i, c in enumerate(conf_val) if isinstance(c, list)]
+        smi_val = [smi_val[i] for i in ok_val]
+        y_val = [y_val[i] for i in ok_val]
+        conf_val = [conf_val[i] for i in ok_val]
+
+        # Test: keep every row - the output needs one prediction per input SMILES. Molecules that
+        # failed get the training set fallback instead of a real prediction, below.
+        train_fallback = target_fallback(y_train, self.task)
+        ok_test = [i for i, c in enumerate(conf_test) if isinstance(c, list)]
+        smi_test_valid = [smi_test[i] for i in ok_test]
+        conf_test_valid = [conf_test[i] for i in ok_test]
+
+        n_failed_test = len(smi_test) - len(smi_test_valid)
+        if n_failed_test and self.verbose:
+            print(
+                f"{n_failed_test} test molecule(s) could not be processed and will be predicted "
+                "using the training set fallback value instead."
             )
-        self._task_type = task_type
-        self._train_fallback = target_fallback(y_all, task_type)
-
-        # 4. Calculate descriptors for the whole (surviving) dataset, once per descriptor type,
-        #    before splitting into train/validation.
-        if self.verbose:
-            print_step_header(3, "Descriptor calculation")
-
-        per_descriptor: dict[str, list[np.ndarray]] = {}
-        self._fitted_descriptors = {}
-        for desc_name, desc_factory in DESCRIPTORS.items():
-            desc_calc = desc_factory()
-            per_descriptor[desc_name] = calculate_descriptors(conf_all, desc_calc)
-            self._fitted_descriptors[desc_name] = desc_calc  # remembers its own learned column-drop decision
-
-            if self.verbose:
-                print(f"> {desc_name}: done")
-
-        # 5. Random train/validation split.
-        idx_train, idx_val = train_test_split(
-            range(len(smi_all)), test_size=self.val_size, random_state=self.seed
-        )
-        smi_train, y_train = _subset(smi_all, idx_train), _subset(y_all, idx_train)
-        smi_val, y_val = _subset(smi_all, idx_val), _subset(y_all, idx_val)
 
         result_df_train = pd.DataFrame({"SMILES": smi_train, "Y_TRUE": y_train})
         result_df_val = pd.DataFrame({"SMILES": smi_val, "Y_TRUE": y_val})
+        result_df_test = pd.DataFrame({"SMILES": smi_test})
 
-        # 6. Train every descriptor/estimator combination.
+        # 3. Calculate descriptors for train+val+test together, once per descriptor type.
         if self.verbose:
-            print_step_header(4, "Model training")
+            print("Step-3. Descriptor calculation")
 
-        total_models = len(DESCRIPTORS) * len(estimators_source)
+        ready_descriptors: dict[str, tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]] = {}
+        for desc_name, desc_factory in DESCRIPTORS.items():
+            desc_calc = desc_factory()
+            x_all = calculate_descriptors(conf_train + conf_val + conf_test_valid, desc_calc)
+            x_train = x_all[: len(conf_train)]
+            x_val = x_all[len(conf_train) : len(conf_train) + len(conf_val)]
+            x_test = x_all[len(conf_train) + len(conf_val) :]
+            ready_descriptors[desc_name] = (x_train, x_val, x_test)
+
+            if self.verbose:
+                print(f"{desc_name}: done")
+
+        # 4. Train every descriptor/estimator combination and predict on train/val/test.
+        if self.verbose:
+            print("Step-4. Model training")
+
+        total_models = len(DESCRIPTORS) * len(self.ESTIMATORS)
         current_model = 0
-        self._trained_models = {}
 
-        for desc_name, x_all in per_descriptor.items():
-            x_train, x_val = _subset(x_all, idx_train), _subset(x_all, idx_val)
-
-            for est_name, factory in estimators_source.items():
-                estimator = factory(accelerator=self.accelerator)
-
+        for desc_name, (x_train, x_val, x_test) in ready_descriptors.items():
+            for est_name, factory in self.ESTIMATORS.items():
+                estimator = factory()
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
 
                 with OutputSuppressor():
-                    pred_train, pred_val, fitted_estimator, fitted_scaler = train_estimator(
-                        x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
-                        accelerator=self.accelerator,
+                    pred_train, pred_val, pred_test = train_estimator(
+                        x_train, x_val, x_test, y_train, y_val, estimator, self.hopt, seed=self.seed
                     )
 
-                self._trained_models[model_name] = {
-                    "descriptor": desc_name,
-                    "estimator": fitted_estimator,
-                    "scaler": fitted_scaler,
-                }
+                preds_by_smi = dict(zip(smi_test_valid, pred_test))
 
-                # Write predictions
                 result_df_train[model_name] = pred_train
-                result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
-
                 result_df_val[model_name] = pred_val
+                result_df_test[model_name] = [preds_by_smi.get(smi, train_fallback) for smi in smi_test]
+
+                result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
                 result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
+                result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
 
                 if self.verbose:
-                    print(f"> [{current_model}/{total_models}] {model_name}")
+                    print(f"[{current_model}/{total_models}] {model_name}")
 
-    def predict(self, smiles: Sequence[str], save: bool = False) -> pd.DataFrame:
-        """Run inference from in-memory fitted models, imputing molecules that fail with :attr:`_train_fallback`.
-
-        Args:
-            smiles (Sequence[str]): SMILES strings to predict on.
-            save (bool): Whether to also write the result to ``test.csv`` in ``self.output_folder``.
-
-        Returns:
-            pd.DataFrame: A ``SMILES`` column plus one prediction column per trained descriptor/estimator combo.
-        """
-
-        if not self.is_trained:
-            raise RuntimeError("LazyMIL is not trained. Call `run` first.")
-
-        smi_test = list(smiles)
-        result_df_test = pd.DataFrame({"SMILES": smi_test})
-
-        mols_test = parse_smiles(smi_test, verbose=False)
-        confs = generate_conformers(
-            mols_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=False, seed=self.seed
-        )
-        failed_smiles = {smi for smi, c in zip(smi_test, confs) if not isinstance(c, list)}
-
-        if failed_smiles and self.verbose:
-            print(
-                f"\n{len(failed_smiles)} molecule(s) could not be processed and will be "
-                "predicted using the training set fallback value instead:"
-            )
-            for i, smi in enumerate(smi_test):
-                if smi in failed_smiles:
-                    print(f"  > Row {i}: {smi}")
-
-        valid_smi = [smi for smi, c in zip(smi_test, confs) if smi not in failed_smiles]
-        valid_confs = [c for smi, c in zip(smi_test, confs) if smi not in failed_smiles]
-
-        descriptor_names = {model_state["descriptor"] for model_state in self._trained_models.values()}
-        x_by_descriptor: dict[str, list[np.ndarray]] = {}
-        if valid_confs:
-            for desc_name in descriptor_names:
-                desc_calc = self._fitted_descriptors[desc_name]
-                x_by_descriptor[desc_name] = calculate_descriptors(valid_confs, desc_calc)
-
-        for model_name, model_state in self._trained_models.items():
-            desc_name = model_state["descriptor"]
-
-            preds_by_smi: dict[str, Any] = {}
-            if valid_smi:
-                x_test = x_by_descriptor[desc_name]
-                x_test_scaled = model_state["scaler"].transform(x_test)
-                with OutputSuppressor():
-                    preds = model_state["estimator"].predict(x_test_scaled)
-                preds_by_smi = dict(zip(valid_smi, preds))
-
-            result_df_test[model_name] = [preds_by_smi.get(smi, self._train_fallback) for smi in smi_test]
-
-        if save:
-            result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
-        return result_df_test
+        return result_df_train, result_df_val, result_df_test
