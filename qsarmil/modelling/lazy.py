@@ -1,17 +1,14 @@
 from __future__ import annotations
 # ruff: noqa: I001
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 import os
 import shutil
 import tempfile
-import time
-from importlib import import_module
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
-import psutil
 
 from milearn.network.classifier import (BagNetworkClassifier,
                                         InstanceNetworkClassifier,
@@ -42,64 +39,84 @@ from rdkit import Chem, RDLogger
 from sklearn.model_selection import train_test_split
 from sklearn.utils.multiclass import type_of_target
 
-from qsarmil.conformer.rdkit import RDKitConformerGenerator
-from qsarmil.descriptor.wrapper import DescriptorWrapper
-
 from qsarmil.utils.logging import FailedConformer, FailedMolecule, OutputSuppressor, print_step_header
 
 
-
-
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
-_VALID_ACCELERATORS = ("cpu", "gpu")
-
-
-def _validate_accelerator(accelerator: str) -> str:
-    """Require an explicit 'cpu' or 'gpu' choice - no 'auto' fallback to whatever hardware happens to be present."""
-    if accelerator not in _VALID_ACCELERATORS:
-        raise ValueError(f"accelerator must be one of {_VALID_ACCELERATORS!r}, got {accelerator!r}")
-    return accelerator
 
 
 # ==========================================================
 # Configuration
 # ==========================================================
-DESCRIPTORS = {
-    "RDKitGEOM": DescriptorWrapper(RDKitGEOM()),
-    "RDKitAUTOCORR": DescriptorWrapper(RDKitAUTOCORR()),
-    "RDKitRDF": DescriptorWrapper(RDKitRDF()),
-    "RDKitMORSE": DescriptorWrapper(RDKitMORSE()),
-    "RDKitWHIM": DescriptorWrapper(RDKitWHIM()),
-    "MolFeatUSRD": DescriptorWrapper(USRDescriptors()),
-    "MolFeatElectroShape": DescriptorWrapper(ElectroShapeDescriptors()),
-    "RDKitGETAWAY": DescriptorWrapper(RDKitGETAWAY()),
-    "MolFeatPmapper": DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
+# Every entry is a zero-argument factory rather than a ready-made instance, so that each call to
+# LazyMIL.run() gets fresh, independent DescriptorWrapper objects instead of sharing (and mutating)
+# module-level state across runs.
+DESCRIPTORS: dict[str, Callable[[], DescriptorWrapper]] = {
+    "RDKitGEOM": lambda: DescriptorWrapper(RDKitGEOM()),
+    "RDKitAUTOCORR": lambda: DescriptorWrapper(RDKitAUTOCORR()),
+    "RDKitRDF": lambda: DescriptorWrapper(RDKitRDF()),
+    "RDKitMORSE": lambda: DescriptorWrapper(RDKitMORSE()),
+    "RDKitWHIM": lambda: DescriptorWrapper(RDKitWHIM()),
+    "MolFeatUSRD": lambda: DescriptorWrapper(USRDescriptors()),
+    "MolFeatElectroShape": lambda: DescriptorWrapper(ElectroShapeDescriptors()),
+    "RDKitGETAWAY": lambda: DescriptorWrapper(RDKitGETAWAY()),
+    "MolFeatPmapper": lambda: DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
 }
 
-REGRESSORS = {
+# Same reasoning as DESCRIPTORS above: factories, not instances, so every run() call and every
+# descriptor gets its own fresh estimator rather than 9 descriptors overwriting one shared model.
+REGRESSORS: dict[str, Callable[..., Any]] = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkRegressor": InstanceWrapperMLPNetworkRegressor(pool="mean"),
-    "MeanBagWrapperMLPNetworkRegressor": BagWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanInstanceWrapperMLPNetworkRegressor": lambda accelerator="cpu": InstanceWrapperMLPNetworkRegressor(
+        pool="mean", accelerator=accelerator
+    ),
+    "MeanBagWrapperMLPNetworkRegressor": lambda accelerator="cpu": BagWrapperMLPNetworkRegressor(
+        pool="mean", accelerator=accelerator
+    ),
     # mil networks
-    "MeanBagNetworkRegressor": BagNetworkRegressor(pool="mean"),
-    "MeanInstanceNetworkRegressor": InstanceNetworkRegressor(pool="mean"),
-    "AdditiveAttentionNetworkRegressor": AdditiveAttentionNetworkRegressor(),
-    "SelfAttentionNetworkRegressor": SelfAttentionNetworkRegressor(),
-    "HopfieldAttentionNetworkRegressor": HopfieldAttentionNetworkRegressor(),
-    "DynamicPoolingNetworkRegressor": DynamicPoolingNetworkRegressor(),
+    "MeanBagNetworkRegressor": lambda accelerator="cpu": BagNetworkRegressor(pool="mean", accelerator=accelerator),
+    "MeanInstanceNetworkRegressor": lambda accelerator="cpu": InstanceNetworkRegressor(
+        pool="mean", accelerator=accelerator
+    ),
+    "AdditiveAttentionNetworkRegressor": lambda accelerator="cpu": AdditiveAttentionNetworkRegressor(
+        accelerator=accelerator
+    ),
+    "SelfAttentionNetworkRegressor": lambda accelerator="cpu": SelfAttentionNetworkRegressor(
+        accelerator=accelerator
+    ),
+    "HopfieldAttentionNetworkRegressor": lambda accelerator="cpu": HopfieldAttentionNetworkRegressor(
+        accelerator=accelerator
+    ),
+    "DynamicPoolingNetworkRegressor": lambda accelerator="cpu": DynamicPoolingNetworkRegressor(
+        accelerator=accelerator
+    ),
 }
 
-CLASSIFIERS =  {
+CLASSIFIERS: dict[str, Callable[..., Any]] = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkClassifier": InstanceWrapperMLPNetworkClassifier(pool="mean"),
-    "MeanBagWrapperMLPNetworkClassifier": BagWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanInstanceWrapperMLPNetworkClassifier": lambda accelerator="cpu": InstanceWrapperMLPNetworkClassifier(
+        pool="mean", accelerator=accelerator
+    ),
+    "MeanBagWrapperMLPNetworkClassifier": lambda accelerator="cpu": BagWrapperMLPNetworkClassifier(
+        pool="mean", accelerator=accelerator
+    ),
     # mil networks
-    "MeanBagNetworkClassifier": BagNetworkClassifier(pool="mean"),
-    "MeanInstanceNetworkClassifier": InstanceNetworkClassifier(pool="mean"),
-    "AdditiveAttentionNetworkClassifier": AdditiveAttentionNetworkClassifier(),
-    "SelfAttentionNetworkClassifier": SelfAttentionNetworkClassifier(),
-    "HopfieldAttentionNetworkClassifier": HopfieldAttentionNetworkClassifier(),
-    "DynamicPoolingNetworkClassifier": DynamicPoolingNetworkClassifier(),
+    "MeanBagNetworkClassifier": lambda accelerator="cpu": BagNetworkClassifier(pool="mean", accelerator=accelerator),
+    "MeanInstanceNetworkClassifier": lambda accelerator="cpu": InstanceNetworkClassifier(
+        pool="mean", accelerator=accelerator
+    ),
+    "AdditiveAttentionNetworkClassifier": lambda accelerator="cpu": AdditiveAttentionNetworkClassifier(
+        accelerator=accelerator
+    ),
+    "SelfAttentionNetworkClassifier": lambda accelerator="cpu": SelfAttentionNetworkClassifier(
+        accelerator=accelerator
+    ),
+    "HopfieldAttentionNetworkClassifier": lambda accelerator="cpu": HopfieldAttentionNetworkClassifier(
+        accelerator=accelerator
+    ),
+    "DynamicPoolingNetworkClassifier": lambda accelerator="cpu": DynamicPoolingNetworkClassifier(
+        accelerator=accelerator
+    ),
 }
 
 DEFAULT_PARAM_GRID = {
@@ -115,90 +132,91 @@ DEFAULT_PARAM_GRID = {
 }
 
 # ==========================================================
-# Utility Functions
+# Pipeline steps
 # ==========================================================
 
-def gen_conformers(
-    smi_list: Iterable[str], num_conf: int = 10, num_cpu: int = os.cpu_count() or 1, verbose: bool = False, seed: int = 42
-) -> list[list[Any] | FailedMolecule | FailedConformer]:
-    """Generate conformers per SMILES; unparseable/failed-embedding molecules become Failed* sentinels, not raises."""
+def parse_smiles(smi_list: Iterable[str], verbose: bool = False) -> list[Any]:
+    """Parse SMILES strings into RDKit molecules; unparseable ones become FailedMolecule sentinels.
+
+    Args:
+        smi_list (Iterable[str]): SMILES strings.
+        verbose (bool): Whether to print a one-line success/failure summary.
+
+    Returns:
+        list: One RDKit ``Mol`` or :class:`~qsarmil.utils.logging.FailedMolecule` per input SMILES.
+    """
+
     mol_list = []
     for smi in smi_list:
         mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            mol = FailedMolecule(smi)
-        mol_list.append(mol)
-    conf_gen = RDKitConformerGenerator(num_conf=num_conf, num_cpu=num_cpu, verbose=verbose, seed=seed)
-    conf_list = conf_gen.run(mol_list)
+        mol_list.append(mol if mol is not None else FailedMolecule(smi))
+
+    if verbose:
+        n_failed = sum(isinstance(m, FailedMolecule) for m in mol_list)
+        print(f"> Parsed {len(mol_list) - n_failed} of {len(mol_list)} SMILES successfully.")
+
+    return mol_list
+
+
+def generate_conformers(
+    mol_list: Iterable[Any],
+    num_conf: int = 10,
+    num_cpu: int = os.cpu_count() or 1,
+    verbose: bool = False,
+    seed: int = 42,
+) -> list[list[Any] | FailedMolecule | FailedConformer]:
+    """Generate conformers per molecule; failed embeddings become FailedConformer sentinels, not raises.
+
+    Args:
+        mol_list (Iterable[Any]): RDKit molecules, or :class:`~qsarmil.utils.logging.FailedMolecule`
+            sentinels (from :func:`parse_smiles`), which pass through unchanged.
+        num_conf (int): Number of conformers to embed per molecule.
+        num_cpu (int): Number of threads to use for conformer generation.
+        verbose (bool): Whether to print a one-line success/failure summary.
+        seed (int): Random seed for conformer embedding.
+
+    Returns:
+        list: One conformer bag (``list[Mol]``) per successfully-embedded molecule, or a
+            :class:`~qsarmil.utils.logging.FailedMolecule`/:class:`~qsarmil.utils.logging.FailedConformer`
+            sentinel for the rest.
+    """
+
+    conf_gen = RDKitConformerGenerator(num_conf=num_conf, num_cpu=num_cpu, verbose=False, seed=seed)
+    conf_list = conf_gen.run(list(mol_list))
+
+    if verbose:
+        n_ok = sum(isinstance(c, list) for c in conf_list)
+        print(f"> Generated conformers for {n_ok} of {len(conf_list)} molecules.")
+
     return conf_list
 
-def report_smiles_parsing(smiles: list[str], confs: list[Any], verbose: bool = True) -> set[int]:
-    """Report Step 1 (SMILES parsing) outcomes and return the failed row indices.
+
+def calculate_descriptors(conf_list: list[list[Any]], calculator: DescriptorWrapper) -> list[np.ndarray]:
+    """Compute descriptor bags for a list of per-molecule conformer bags."""
+    calculator.verbose = False  # the low-level per-conformer ticker is redundant with LazyMIL's own step progress
+    return calculator.run(conf_list)
+
+
+def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Min-max scale descriptor bags, fitting the scaler on the train set only.
 
     Args:
-        smiles (list[str]): SMILES strings, in their original order.
-        confs (list[Any]): Per-SMILES :func:`gen_conformers` output, same order.
-        verbose (bool): Whether to print the report.
+        x_train (list[np.ndarray]): Training bags to fit the scaler on.
+        x_test (list[np.ndarray]): Bags to scale using that same fit.
 
     Returns:
-        set[int]: Indices into ``smiles`` whose SMILES failed to parse.
+        tuple[list[np.ndarray], list[np.ndarray]]: Scaled ``(x_train, x_test)``.
     """
+    scaler = BagMinMaxScaler()
+    scaler.fit(x_train)
+    return scaler.transform(x_train), scaler.transform(x_test)
 
-    failed_idx = {i for i, c in enumerate(confs) if isinstance(c, FailedMolecule)}
-
-    if verbose:
-        print_step_header(1, "SMILES parsing")
-        n_total = len(smiles)
-        n_ok = n_total - len(failed_idx)
-        print(f"> For {n_ok} of {n_total} molecules, SMILES were parsed correctly.")
-        if failed_idx:
-            print(f"> For {len(failed_idx)} molecules, SMILES could not be parsed and were removed from training:")
-            for i in sorted(failed_idx):
-                print(f"       - Row {i}:  {smiles[i]}")
-
-    return failed_idx
-
-
-def report_conformer_generation(
-    smiles: list[str], confs: list[Any], already_failed: set[int], verbose: bool = True
-) -> set[int]:
-    """Report Step 2 (conformer generation) outcomes and return the failed row indices.
-
-    Args:
-        smiles (list[str]): SMILES strings, in their original order.
-        confs (list[Any]): Per-SMILES :func:`gen_conformers` output, same order.
-        already_failed (set[int]): Indices already dropped in Step 1, excluded from the "considered" count.
-        verbose (bool): Whether to print the report.
-
-    Returns:
-        set[int]: Indices into ``smiles`` whose 3D embedding failed.
-    """
-
-    failed_idx = {i for i, c in enumerate(confs) if isinstance(c, FailedConformer)}
-    ok_idx = [i for i, c in enumerate(confs) if isinstance(c, list)]
-
-    if verbose:
-        print_step_header(2, "Conformer generation")
-        n_considered = len(smiles) - len(already_failed)
-        print(f"> For {len(ok_idx)} of {n_considered} molecules, conformers were generated successfully.")
-        if ok_idx:
-            counts = [len(confs[i]) for i in ok_idx]
-            avg, mn, mx = np.mean(counts), min(counts), max(counts)
-            print(f"> Average num conf: {avg:.1f} | min num conf: {mn} | max num conf: {mx}")
-        if failed_idx:
-            print(
-                f"> For {len(failed_idx)} molecules, conformer generation failed, "
-                "and they were removed from training:"
-            )
-            for i in sorted(failed_idx):
-                print(f"       - Row {i}:  {smiles[i]}")
-
-    return failed_idx
 
 def _subset(items: Sequence[Any], idx: Sequence[int]) -> list[Any]:
     """Pick out ``items[i]`` for each ``i`` in ``idx``, preserving ``idx``'s order."""
 
     return [items[i] for i in idx]
+
 
 def target_fallback(y: Iterable[Any], task_type: str) -> Any:
     """Fallback prediction for molecules that can't be processed at inference time.
@@ -218,37 +236,10 @@ def target_fallback(y: Iterable[Any], task_type: str) -> Any:
     return values[np.argmax(counts)]
 
 
-def _print_progress_item(index: int, total: int, label: str, elapsed_min: float, mem_gb: float) -> None:
-    """Print a ``[i/n] label`` line followed by an indented, hanging-aligned timing/memory line."""
-
-    prefix = f"[{index}/{total}] "
-    print(f"{prefix}{label}")
-    print(f"{' ' * len(prefix)}> Finished in {elapsed_min:.2f} min | Memory usage: {mem_gb:.3f} G")
-
-
-def calc_descriptors(conf_list: list[list[Any]], calculator: DescriptorWrapper) -> list[np.ndarray]:
-    """Compute descriptor bags for a list of per-molecule conformer bags."""
-    calculator.verbose = False  # the low-level per-conformer ticker is redundant with LazyMIL's own step progress
-    return calculator.run(conf_list)
-
-def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Min-max scale descriptor bags, fitting the scaler on the train set only.
-
-    Args:
-        x_train (list[np.ndarray]): Training bags to fit the scaler on.
-        x_test (list[np.ndarray]): Bags to scale using that same fit.
-
-    Returns:
-        tuple[list[np.ndarray], list[np.ndarray]]: Scaled ``(x_train, x_test)``.
-    """
-    scaler = BagMinMaxScaler()
-    scaler.fit(x_train)
-    return scaler.transform(x_train), scaler.transform(x_test)
-
 # ==========================================================
-# ModelBuilder Class
+# Estimator training
 # ==========================================================
-def build_model(
+def train_estimator(
     x_train: list[np.ndarray],
     x_val: list[np.ndarray],
     y_train: Iterable[Any],
@@ -256,7 +247,7 @@ def build_model(
     estimator_instance: Any,
     hopt: bool = True,
     seed: int = 42,
-    accelerator: str = "auto",
+    accelerator: str = "cpu",
 ) -> tuple[list[Any], list[Any], Any, BagMinMaxScaler]:
     """Fit one estimator and refit on train+val, returning predictions and the artifacts to persist.
 
@@ -268,7 +259,7 @@ def build_model(
         estimator_instance: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
         hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting, if supported.
         seed (int): Random seed passed to the estimator's hyperparameter search.
-        accelerator (str): ``"auto"``/``"cpu"``/``"gpu"``, forced into the hopt search grid so it
+        accelerator (str): ``"cpu"``/``"gpu"``, forced into the hopt search grid so it
             can't be silently overridden by ``DEFAULT_PARAM_GRID``'s own fixed value.
 
     Returns:
@@ -325,12 +316,12 @@ class LazyMIL:
             num_conf (int): Number of conformers to generate per molecule.
             num_cpu (int): Number of CPU threads to use for conformer generation.
             output_folder (str, optional): Output directory; a fresh temp dir is created and wiped if omitted/exists.
-            verbose (bool): Whether to print per-model progress and memory usage.
+            verbose (bool): Whether to print per-step progress.
             seed (int): Random seed for embedding, validation, the train/val split, and hyperparameter search.
             val_size (float): Fraction of the data held out as a random validation split inside :meth:`run`.
             task (str, optional): ``"continuous"`` or ``"binary"`` to force the task, skipping auto-detection.
-            accelerator (str): ``"cpu"`` or ``"gpu"`` - an explicit choice, never auto-detected. Used for
-                training in :meth:`run`; :meth:`predict` can override it per call.
+            accelerator (str): ``"cpu"`` or ``"gpu"``, passed straight through to the underlying estimators.
+                Used for training in :meth:`run`; :meth:`predict` can override it per call.
         """
         self.hopt = hopt
         self.num_conf = num_conf
@@ -340,7 +331,7 @@ class LazyMIL:
         self.seed = seed
         self.val_size = val_size
         self.task = task
-        self.accelerator = _validate_accelerator(accelerator)
+        self.accelerator = accelerator
 
         if os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
@@ -362,6 +353,9 @@ class LazyMIL:
     def run(self, smiles: Sequence[str], y: Sequence[Any]) -> None:
         """Train every descriptor/estimator combination and write predictions to CSV.
 
+        Pipeline: parse SMILES, generate conformers, calculate descriptors for the whole dataset,
+        then split into train/validation, then train every descriptor/estimator combination.
+
         Args:
             smiles (Sequence[str]): SMILES strings.
             y (Sequence[Any]): Target property value for each SMILES, same length and order as ``smiles``.
@@ -372,18 +366,23 @@ class LazyMIL:
 
         smi_all, y_all = list(smiles), list(y)
 
-        # 1 & 2. Parse SMILES and generate conformers once for the whole
-        #    dataset, then report+drop molecules that fail either step.
-        conf_all = gen_conformers(
-            smi_all, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=False, seed=self.seed
-        )
-        parse_failed = report_smiles_parsing(smi_all, conf_all, self.verbose)
-        conf_failed = report_conformer_generation(smi_all, conf_all, parse_failed, self.verbose)
+        # 1. Parse SMILES.
+        if self.verbose:
+            print_step_header(1, "SMILES parsing")
+        mols_all = parse_smiles(smi_all, verbose=self.verbose)
 
-        keep_idx = [i for i in range(len(smi_all)) if i not in parse_failed and i not in conf_failed]
+        # 2. Generate conformers.
+        if self.verbose:
+            print_step_header(2, "Conformer generation")
+        conf_all = generate_conformers(
+            mols_all, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose, seed=self.seed
+        )
+
+        keep_idx = [i for i, c in enumerate(conf_all) if isinstance(c, list)]
         smi_all, y_all, conf_all = _subset(smi_all, keep_idx), _subset(y_all, keep_idx), _subset(conf_all, keep_idx)
 
-        # 3. Get a task type
+        # 3. Get a task type and cache the fallback prediction (mean / most frequent class over
+        #    the whole dataset) used by `predict` for molecules it can't process later.
         task_type = self.task if self.task is not None else type_of_target(y_all)
         if task_type == "continuous":
             estimators_source = REGRESSORS
@@ -394,68 +393,55 @@ class LazyMIL:
                 f"Task type '{task_type}' not supported (only 'continuous' and 'binary' targets are supported)."
             )
         self._task_type = task_type
-
-        # 4. Cache the fallback prediction (mean / most frequent class over
-        #    the whole dataset) used by `predict` for molecules it can't
-        #    process later.
         self._train_fallback = target_fallback(y_all, task_type)
+
+        # 4. Calculate descriptors for the whole (surviving) dataset, once per descriptor type,
+        #    before splitting into train/validation.
+        if self.verbose:
+            print_step_header(3, "Descriptor calculation")
+
+        per_descriptor: dict[str, list[np.ndarray]] = {}
+        self._fitted_descriptors = {}
+        for desc_name, desc_factory in DESCRIPTORS.items():
+            desc_calc = desc_factory()
+            per_descriptor[desc_name] = calculate_descriptors(conf_all, desc_calc)
+            self._fitted_descriptors[desc_name] = desc_calc  # remembers its own learned column-drop decision
+
+            if self.verbose:
+                print(f"> {desc_name}: done")
 
         # 5. Random train/validation split.
         idx_train, idx_val = train_test_split(
             range(len(smi_all)), test_size=self.val_size, random_state=self.seed
         )
-        smi_train, y_train, conf_train = _subset(smi_all, idx_train), _subset(y_all, idx_train), _subset(
-            conf_all, idx_train
-        )
-        smi_val, y_val, conf_val = _subset(smi_all, idx_val), _subset(y_all, idx_val), _subset(conf_all, idx_val)
+        smi_train, y_train = _subset(smi_all, idx_train), _subset(y_all, idx_train)
+        smi_val, y_val = _subset(smi_all, idx_val), _subset(y_all, idx_val)
 
         result_df_train = pd.DataFrame({"SMILES": smi_train, "Y_TRUE": y_train})
         result_df_val = pd.DataFrame({"SMILES": smi_val, "Y_TRUE": y_val})
 
-        # 6. Calculate descriptors for every descriptor set.
+        # 6. Train every descriptor/estimator combination.
         if self.verbose:
-            print_step_header(3, "Descriptor calculation")
-
-        per_descriptor: dict[str, tuple[list[np.ndarray], list[np.ndarray]]] = {}
-        self._fitted_descriptors = {}
-        for d_i, (desc_name, desc_source) in enumerate(DESCRIPTORS.items(), start=1):
-            desc_calc = desc_source()
-
-            start = time.time()
-            x_train = calc_descriptors(conf_train, desc_calc)
-            x_val = calc_descriptors(conf_val, desc_calc)
-            elapsed_min = (time.time() - start) / 60
-            mem_gb = psutil.Process().memory_info().rss / (1024**3)
-
-            per_descriptor[desc_name] = (x_train, x_val)
-            self._fitted_descriptors[desc_name] = desc_calc  # remembers its own learned column-drop decision
-
-            if self.verbose:
-                _print_progress_item(d_i, len(DESCRIPTORS), f"{desc_name}:", elapsed_min, mem_gb)
-
-        # 7. Train every descriptor/estimator combination.
-        if self.verbose:
-            print_step_header(4, "Individual model building")
+            print_step_header(4, "Model training")
 
         total_models = len(DESCRIPTORS) * len(estimators_source)
         current_model = 0
         self._trained_models = {}
 
-        for desc_name, (x_train, x_val) in per_descriptor.items():
+        for desc_name, x_all in per_descriptor.items():
+            x_train, x_val = _subset(x_all, idx_train), _subset(x_all, idx_val)
+
             for est_name, factory in estimators_source.items():
                 estimator = factory(accelerator=self.accelerator)
 
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
 
-                start = time.time()
                 with OutputSuppressor():
-                    pred_train, pred_val, fitted_estimator, fitted_scaler = build_model(
+                    pred_train, pred_val, fitted_estimator, fitted_scaler = train_estimator(
                         x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
                         accelerator=self.accelerator,
                     )
-                elapsed_min = (time.time() - start) / 60
-                mem_gb = psutil.Process().memory_info().rss / (1024**3)
 
                 self._trained_models[model_name] = {
                     "descriptor": desc_name,
@@ -471,7 +457,7 @@ class LazyMIL:
                 result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
 
                 if self.verbose:
-                    _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
+                    print(f"> [{current_model}/{total_models}] {model_name}")
 
     def predict(self, smiles: Sequence[str], save: bool = False) -> pd.DataFrame:
         """Run inference from in-memory fitted models, imputing molecules that fail with :attr:`_train_fallback`.
@@ -490,10 +476,11 @@ class LazyMIL:
         smi_test = list(smiles)
         result_df_test = pd.DataFrame({"SMILES": smi_test})
 
-        confs = gen_conformers(smi_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=False, seed=self.seed)
-        failed_smiles = {
-            smi for smi, c in zip(smi_test, confs) if isinstance(c, (FailedMolecule, FailedConformer))
-        }
+        mols_test = parse_smiles(smi_test, verbose=False)
+        confs = generate_conformers(
+            mols_test, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=False, seed=self.seed
+        )
+        failed_smiles = {smi for smi, c in zip(smi_test, confs) if not isinstance(c, list)}
 
         if failed_smiles and self.verbose:
             print(
@@ -512,7 +499,7 @@ class LazyMIL:
         if valid_confs:
             for desc_name in descriptor_names:
                 desc_calc = self._fitted_descriptors[desc_name]
-                x_by_descriptor[desc_name] = calc_descriptors(valid_confs, desc_calc)
+                x_by_descriptor[desc_name] = calculate_descriptors(valid_confs, desc_calc)
 
         for model_name, model_state in self._trained_models.items():
             desc_name = model_state["descriptor"]

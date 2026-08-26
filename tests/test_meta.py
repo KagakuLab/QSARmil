@@ -7,7 +7,11 @@ import qsarmil.modelling.lazy as lazy_mod
 import qsarmil.modelling.meta as meta_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
-from qsarmil.modelling.meta import MultiConformerClassifier, MultiConformerEstimator, MultiConformerRegressor
+from qsarmil.modelling.meta import (
+    MultiConformerClassifier,
+    MultiConformerEstimator,
+    MultiConformerRegressor,
+)
 
 
 class FakeGeneticSearch:
@@ -85,12 +89,11 @@ def test_init_default_creates_temp_dir():
     assert model._lazy_model.accelerator == "cpu"
 
 
-def test_init_rejects_invalid_accelerator(tmp_path):
-    try:
-        MultiConformerRegressor(output_folder=str(tmp_path / "out"), accelerator="auto")
-        assert False, "should reject anything other than 'cpu'/'gpu'"
-    except ValueError as e:
-        assert "cpu" in str(e) and "gpu" in str(e)
+def test_init_passes_accelerator_through_unvalidated(tmp_path):
+    """The library no longer validates `accelerator` itself - any value is stored as given
+    and forwarded to the underlying estimators; CLI-level Choice validation covers end users."""
+    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), accelerator="auto")
+    assert model._lazy_model.accelerator == "auto"
 
 
 def test_train_threads_accelerator_into_lazy_model(monkeypatch, tmp_path):
