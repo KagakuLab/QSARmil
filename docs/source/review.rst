@@ -19,7 +19,7 @@ Ready to use
      - TODO
    * - Descriptor calculation
      - TODO
-   * - Command-line interface (``train`` / ``predict``)
+   * - Command-line interface (``train_predict``)
      - TODO
 
 Under development

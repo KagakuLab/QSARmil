@@ -12,7 +12,8 @@ Via the CLI:
 
 .. code-block:: bash
 
-   qsarmil train data.csv --hopt True
+   qsarmil train_predict --train-path train.csv --test-path test.csv --task-type regression \
+       --output-folder ./results --output-file ./results/predictions.csv --hopt True
 
 TODO: document the search strategy used (e.g. grid/random/Bayesian), the
 default search space per model type, and how many trials are run by

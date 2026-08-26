@@ -1,7 +1,5 @@
 import csv
 import os
-import pickle
-import types
 
 import numpy as np
 import pandas as pd
@@ -475,21 +473,6 @@ def test_lazymil_run_unsupported_task_type(tmp_path):
         lazy.run(smiles, y)
 
 
-def _model_names(lazy: LazyMIL) -> list[str]:
-    """Read back just the model names stored in a trained LazyMIL's models file."""
-    import pickle
-
-    names = []
-    with open(lazy.models_path(), "rb") as f:
-        while True:
-            try:
-                record = pickle.load(f)
-            except EOFError:
-                break
-            names.append(record["model_name"])
-    return names
-
-
 def test_lazymil_run_forced_task_skips_autodetection(monkeypatch, tmp_path):
     """Passing task= bypasses type_of_target, so a 2-value numeric target
     (which sklearn would call 'binary') still routes to REGRESSORS."""
@@ -506,7 +489,7 @@ def test_lazymil_run_forced_task_skips_autodetection(monkeypatch, tmp_path):
     lazy.run(smiles, y)
 
     assert lazy._task_type == "continuous"
-    assert "RDKitGEOM|Mock" in _model_names(lazy)
+    assert "RDKitGEOM|Mock" in lazy._trained_models
 
 
 def test_lazymil_run_splits_reproducibly_with_seed(monkeypatch, tmp_path):
@@ -574,31 +557,22 @@ def test_lazymil_predict_before_train_raises(tmp_path):
 
 def test_lazymil_save_load_predict_inference_only(monkeypatch, tmp_path):
     """A trained LazyMIL is a plain picklable object - no dedicated save()/load() needed."""
+def test_lazymil_predict_reuses_same_process_trained_models(monkeypatch, tmp_path):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
     monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
 
     smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
     y = [1.1, 2.2, 3.3, 4.4, 5.5]
-    lazy = LazyMIL(
-        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
-    )
+    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     lazy.run(smiles, y)
     assert lazy.is_trained is True
-
-    pickle_path = tmp_path / "lazymil.pkl"
-    with open(pickle_path, "wb") as f:
-        pickle.dump(lazy, f)
-
-    with open(pickle_path, "rb") as f:
-        loaded: LazyMIL = pickle.load(f)
-    assert loaded.accelerator == "gpu"
 
     def _should_not_retrain(*args, **kwargs):
         raise AssertionError("predict path retrained a model")
 
     monkeypatch.setattr(lazy_mod, "build_model", _should_not_retrain)
 
-    pred_df = loaded.predict(["CCCl", "CCF"], save=True)
+    pred_df = lazy.predict(["CCCl", "CCF"], save=True)
     assert len(pred_df) == 2
     assert "RDKitGEOM|Mock" in pred_df.columns
     assert os.path.exists(tmp_path / "out" / "test.csv")
@@ -623,62 +597,6 @@ def test_lazymil_predict_imputes_failed_molecules_with_fallback(monkeypatch, tmp
     assert "not_a_valid_smiles!!!" in captured.out
 
 
-def test_lazymil_predict_uses_own_accelerator_by_default_and_allows_override(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 3.3, 2.2, 4.4, 5.5]
-    lazy = LazyMIL(
-        hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
-    )
-    lazy.run(smiles, y)
-
-    seen = []
-    original = lazy._ensure_estimator_predict_ready
-
-    def spy(estimator, accelerator):
-        seen.append(accelerator)
-        return original(estimator, accelerator)
-
-    monkeypatch.setattr(lazy, "_ensure_estimator_predict_ready", spy)
-
-    lazy.predict(["CCO"])
-    assert seen == ["gpu"]  # falls back to the trained model's own accelerator
-
-    seen.clear()
-    lazy.predict(["CCO"], accelerator="cpu")
-    assert seen == ["cpu"]  # per-call override wins
-
-
-def test_lazymil_predict_rejects_invalid_accelerator_override(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 3.3, 2.2, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
-
-    with pytest.raises(ValueError, match="cpu.*gpu"):
-        lazy.predict(["CCO"], accelerator="auto")
-
-
-def test_lazymil_predict_missing_descriptor_raises(monkeypatch, tmp_path):
-    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
-    monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
-
-    smiles = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y = [1.1, 2.2, 3.3, 4.4, 5.5]
-    lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
-    lazy.run(smiles, y)
-
-    # Simulate a models.pkl that's out of sync with this LazyMIL's fitted descriptors.
-    lazy._fitted_descriptors = {}
-    with pytest.raises(ValueError, match="no fitted calculator"):
-        lazy.predict(["CCO"])
-
-
 def test_lazymil_predict_silent_when_nothing_fails(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
     monkeypatch.setattr(lazy_mod, "REGRESSORS", {"Mock": MockEstimator(supports_hopt=False)})
@@ -701,71 +619,12 @@ def test_lazymil_predict_reraises_other_attributeerror(monkeypatch, tmp_path):
 
     lazy = LazyMIL(hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False)
     lazy._fitted_descriptors = {"RDKitGEOM": DescriptorWrapper(RDKitGEOM(), verbose=False)}
-    lazy._n_trained_models = 1
-    with open(lazy.models_path(), "wb") as f:
-        pickle.dump(
-            {"model_name": "RDKitGEOM|Mock", "descriptor": "RDKitGEOM", "estimator": _BadEstimator(), "scaler": _IdentityScaler()},
-            f,
-        )
+    lazy._trained_models = {
+        "RDKitGEOM|Mock": {"descriptor": "RDKitGEOM", "estimator": _BadEstimator(), "scaler": _IdentityScaler()}
+    }
 
     with pytest.raises(AttributeError, match="different attribute error"):
         lazy.predict(["CCO"])
-
-
-@pytest.mark.parametrize(
-    ("module_name", "has_trainer", "trainer"),
-    [
-        ("sklearn.fake", False, None),
-        ("milearn.fake", False, None),
-        ("milearn.fake", True, object()),
-    ],
-)
-def test_lazymil_ensure_estimator_predict_ready_returns_early(
-    tmp_path, module_name, has_trainer, trainer
-):
-    class Estimator:
-        pass
-
-    estimator = Estimator()
-    estimator.__class__.__module__ = module_name
-    if has_trainer:
-        estimator._trainer = trainer
-
-    lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=False)
-    lazy._ensure_estimator_predict_ready(estimator, "cpu")
-
-
-def test_lazymil_ensure_estimator_predict_ready_rebuilds_trainer_with_given_accelerator(
-    monkeypatch, tmp_path, capsys
-):
-    calls = {}
-
-    class FakeTrainer:
-        def __init__(self, **kwargs):
-            calls["kwargs"] = kwargs
-
-    class Estimator:
-        __module__ = "milearn.fake"
-
-    estimator = Estimator()
-    estimator._trainer = None
-    estimator.hparams = types.SimpleNamespace(max_epochs=7)
-
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "pytorch_lightning",
-        types.SimpleNamespace(Trainer=FakeTrainer),
-    )
-
-    lazy = LazyMIL(output_folder=str(tmp_path / "out"), verbose=True)
-    lazy._ensure_estimator_predict_ready(estimator, "gpu")
-
-    assert isinstance(estimator._trainer, FakeTrainer)
-    assert calls["kwargs"]["max_epochs"] == 7
-    assert calls["kwargs"]["accelerator"] == "gpu"
-    assert calls["kwargs"]["deterministic"] is True
-    # Rebuilding the trainer is silent - no raw hparams dump to the console.
-    assert capsys.readouterr().out == ""
 
 
 def test_print_progress_item(capsys):

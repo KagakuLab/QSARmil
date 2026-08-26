@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import click
 
-from qsarmil.cli.predict import predict_command
-from qsarmil.cli.train import train_command
+from qsarmil.cli.train_predict import train_predict_command
 
 
 @click.group()
@@ -12,8 +11,7 @@ def cli() -> None:
     """QSARmil: train and apply multi-conformer multi-instance learning models on SMILES data."""
 
 
-cli.add_command(train_command)
-cli.add_command(predict_command)
+cli.add_command(train_predict_command)
 
 
 if __name__ == "__main__":

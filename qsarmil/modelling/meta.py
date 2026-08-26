@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import pickle
 import time
 from typing import Any, Sequence
 
@@ -10,12 +9,10 @@ import psutil
 from qsarcons.consensus import GeneticSearch
 from rdkit import RDLogger
 
-from qsarmil.modelling.lazy import LazyMIL, _validate_accelerator
+from qsarmil.modelling.lazy import LazyMIL
 from qsarmil.utils.logging import print_step_header
 
 RDLogger.DisableLog("rdApp.*")
-
-_ESTIMATOR_FILENAME = "estimator.pkl"
 
 
 class MultiConformerEstimator:
@@ -23,6 +20,8 @@ class MultiConformerEstimator:
 
     All the training/inference settings (``num_conf``, ``hopt``, ``accelerator``, etc.) live on the
     ``LazyMIL`` this builds in :meth:`__init__` - this class itself only owns the consensus-search result.
+    Train and predict within the same process/session - there's no serialization; use :meth:`train` then
+    :meth:`predict` in one run.
     """
 
     _task: str | None = None
@@ -47,8 +46,7 @@ class MultiConformerEstimator:
             output_folder (str, optional): Directory for the model's files; a fresh temp dir is created if omitted.
             verbose (bool): Whether to print progress from the underlying steps.
             seed (int): Random seed for the train/val split and everything LazyMIL seeds internally.
-            accelerator (str): ``"cpu"`` or ``"gpu"`` - an explicit choice, never auto-detected. Used for
-                training; :meth:`predict` and :meth:`load` can override it later.
+            accelerator (str): ``"cpu"`` or ``"gpu"`` - an explicit choice, never auto-detected.
         """
         super().__init__()
 
@@ -68,7 +66,7 @@ class MultiConformerEstimator:
 
     @property
     def output_folder(self) -> str:
-        """Directory holding this model's files - the only thing :meth:`save`/:meth:`load` need to know."""
+        """Directory holding this model's intermediate files (``train.csv``/``val.csv``/``test.csv``)."""
 
         return self._lazy_model.output_folder
 
@@ -114,101 +112,30 @@ class MultiConformerEstimator:
 
         return self
 
-    def predict(self, smiles: Sequence[str], save: bool = False, accelerator: str | None = None) -> list[Any]:
+    def predict(self, smiles: Sequence[str], save: bool = False) -> list[Any]:
         """Predict for new SMILES using the stored trained state.
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
             save (bool): Whether to also write LazyMIL's per-model predictions to ``test.csv``.
-            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to run inference on, overriding
-                :attr:`accelerator` for this call only - e.g. predict on CPU for a model trained on GPU.
 
         Returns:
             list: Predicted property value for each input SMILES, same order as ``smiles``.
         """
 
         if not self.is_trained:
-            raise RuntimeError("Model is not trained. Call `train` or `load` first.")
+            raise RuntimeError("Model is not trained. Call `train` first.")
 
-        res_test = self._lazy_model.predict(smiles, save=save, accelerator=accelerator)
+        res_test = self._lazy_model.predict(smiles, save=save)
         x_test = res_test.iloc[:, 1:]
 
         missing_cols = [c for c in self.best_consensus if c not in x_test.columns]
         if missing_cols:
-            raise ValueError(
-                "Serialized consensus references missing model columns: "
-                + ", ".join(missing_cols)
-            )
+            raise ValueError("Consensus references missing model columns: " + ", ".join(missing_cols))
 
-        # Prefer the original qsarcons predictor when it can be serialized,
-        # but keep a robust fallback for environments where that object is
-        # not pickle-friendly.
-        if self._consensus_search is not None and hasattr(self._consensus_search, "predict"):
-            pred_test = self._consensus_search.predict(x_test[self.best_consensus])
-        else:
-            pred_test = x_test[self.best_consensus].mean(axis=1).to_numpy()
+        pred_test = self._consensus_search.predict(x_test[self.best_consensus])
 
         return list(pred_test)
-
-    def __getstate__(self) -> dict[str, Any]:
-        """Drop ``_consensus_search`` if it can't be pickled, warning instead of failing silently."""
-
-        state = self.__dict__.copy()
-        try:
-            pickle.dumps(state["_consensus_search"])
-        except (pickle.PickleError, AttributeError, TypeError):
-            print(
-                "Warning: the consensus search object could not be serialized and will be dropped. "
-                "The loaded model will predict using the mean of the consensus models' predictions instead."
-            )
-            state["_consensus_search"] = None
-        return state
-
-    def save(self) -> None:
-        """Serialize the trained model to ``{self.output_folder}/estimator.pkl``."""
-
-        if not self.is_trained:
-            raise RuntimeError("Model is not trained. Nothing to serialize.")
-
-        path = os.path.join(self.output_folder, _ESTIMATOR_FILENAME)
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
-
-    @classmethod
-    def load(cls, output_folder: str, accelerator: str | None = None) -> MultiConformerEstimator:
-        """Load a model previously saved with :meth:`save`.
-
-        Args:
-            output_folder (str): The folder passed as ``output_folder`` at training time (or wherever it
-                was moved to since) - the only thing you ever need to point at; internal file names/layout
-                inside it are an implementation detail.
-            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to override the accelerator this model was
-                trained with for all future :meth:`predict` calls - e.g. load a GPU-trained model but run
-                inference on CPU from now on. Defaults to whatever accelerator was used at training time.
-
-        Returns:
-            MultiConformerEstimator: The exact object (and subclass) that was saved.
-        """
-
-        estimator_path = os.path.join(output_folder, _ESTIMATOR_FILENAME)
-        if not os.path.exists(estimator_path):
-            raise FileNotFoundError(
-                f"No {_ESTIMATOR_FILENAME} found in {output_folder!r} - is this a QSARmil model folder?"
-            )
-
-        with open(estimator_path, "rb") as f:
-            model: MultiConformerEstimator = pickle.load(f)
-
-        model._lazy_model.output_folder = output_folder
-        if accelerator is not None:
-            model._lazy_model.accelerator = _validate_accelerator(accelerator)
-
-        if not os.path.exists(model._lazy_model.models_path()):
-            raise FileNotFoundError(
-                f"No models.pkl found in {output_folder!r} - the model folder may be incomplete."
-            )
-
-        return model
 
 
 class MultiConformerRegressor(MultiConformerEstimator):

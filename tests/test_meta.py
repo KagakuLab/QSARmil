@@ -1,8 +1,6 @@
 import os
-import pickle
 
 import pandas as pd
-import pytest
 from conftest import MockEstimator
 
 import qsarmil.modelling.lazy as lazy_mod
@@ -23,14 +21,6 @@ class FakeGeneticSearch:
 
     def run(self, x_val, true_val):
         return list(x_val.columns)
-
-    def predict(self, x_subset):
-        return list(x_subset.mean(axis=1))
-
-
-class UnpicklableConsensus:
-    def __getstate__(self):
-        raise pickle.PickleError("cannot pickle")
 
     def predict(self, x_subset):
         return list(x_subset.mean(axis=1))
@@ -116,85 +106,6 @@ def test_train_threads_accelerator_into_lazy_model(monkeypatch, tmp_path):
     assert model._lazy_model.accelerator == "gpu"
 
 
-def test_predict_accelerator_override_is_forwarded_to_lazy_model(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-
-    model = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, accelerator="gpu"
-    )
-    model.train(smiles_train, y_train)
-
-    seen = []
-    original = model._lazy_model.predict
-
-    def spy(smiles, save=False, accelerator=None):
-        seen.append(accelerator)
-        return original(smiles, save=save, accelerator=accelerator)
-
-    monkeypatch.setattr(model._lazy_model, "predict", spy)
-
-    model.predict(["CCF"])
-    assert seen == [None]  # no override given - LazyMIL falls back to its own "gpu"
-
-    model.predict(["CCF"], accelerator="cpu")
-    assert seen == [None, "cpu"]
-
-
-def test_load_accelerator_override_updates_lazy_model_default(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-
-    model = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "train_out"), verbose=False,
-        accelerator="gpu",
-    )
-    model.train(smiles_train, y_train)
-    model.save()
-
-    loaded = MultiConformerRegressor.load(str(tmp_path / "train_out"), accelerator="cpu")
-
-    assert loaded._lazy_model.accelerator == "cpu"
-
-
-def test_load_without_override_keeps_training_time_accelerator(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-
-    model = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "train_out"), verbose=False,
-        accelerator="gpu",
-    )
-    model.train(smiles_train, y_train)
-    model.save()
-
-    loaded = MultiConformerRegressor.load(str(tmp_path / "train_out"))
-
-    assert loaded._lazy_model.accelerator == "gpu"
-
-
-def test_load_missing_estimator_pkl_raises(tmp_path):
-    with pytest.raises(FileNotFoundError, match="No estimator.pkl found"):
-        MultiConformerRegressor.load(str(tmp_path / "empty_folder"))
-
-
-def test_load_missing_models_pkl_raises(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
-    model.train(smiles_train, y_train)
-    model.save()
-
-    os.remove(tmp_path / "out" / "models.pkl")
-
-    with pytest.raises(FileNotFoundError, match="No models.pkl found"):
-        MultiConformerRegressor.load(str(tmp_path / "out"))
-
-
 def test_train_then_predict_split_api(monkeypatch, tmp_path, capsys):
     _patch_fast_pipeline(monkeypatch)
 
@@ -260,60 +171,9 @@ def test_predict_before_train_raises(tmp_path):
     model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
     try:
         model.predict(["CCO"])
-        assert False, "predict should fail before train/load"
+        assert False, "predict should fail before train"
     except RuntimeError as e:
         assert "not trained" in str(e)
-
-
-def test_save_load_and_predict_from_smiles(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
-
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-
-    model = MultiConformerRegressor(
-        num_conf=2,
-        hopt=False,
-        num_cpu=1,
-        output_folder=str(tmp_path / "train_out"),
-        verbose=False,
-        seed=42,
-    )
-    model.train(smiles_train, y_train)
-    model.save()
-
-    loaded = MultiConformerRegressor.load(str(tmp_path / "train_out"))
-    preds = loaded.predict(["CCF"])
-    assert isinstance(preds, list)
-    assert len(preds) == 1
-
-    preds2 = loaded.predict(["CCF", "CCO"])
-    assert isinstance(preds2, list)
-    assert len(preds2) == 2
-
-
-def test_predict_before_train_with_untrained_model_raises(tmp_path):
-    """Even though _lazy_model exists from __init__ onward, predict() still requires train()/load() first."""
-    _ = tmp_path
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
-    try:
-        model.predict(["CCF"])
-        assert False, "predict should fail when the model hasn't been trained"
-    except RuntimeError:
-        assert True
-
-
-def test_predict_fallback_to_mean_when_consensus_predictor_missing(monkeypatch, tmp_path):
-    _patch_fast_pipeline(monkeypatch)
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
-    model.train(smiles_train, y_train)
-
-    model._consensus_search = None
-    preds = model.predict(["CCF"])
-    assert isinstance(preds, list)
-    assert len(preds) == 1
 
 
 def test_predict_raises_when_consensus_columns_missing(monkeypatch, tmp_path):
@@ -329,29 +189,3 @@ def test_predict_raises_when_consensus_columns_missing(monkeypatch, tmp_path):
         assert False, "predict should fail when consensus columns are missing"
     except ValueError as e:
         assert "missing model columns" in str(e)
-
-
-def test_save_before_train_raises(tmp_path):
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), verbose=False)
-    try:
-        model.save()
-        assert False, "save should fail before train/load"
-    except RuntimeError as e:
-        assert "not trained" in str(e)
-
-
-def test_save_handles_unpicklable_consensus(monkeypatch, tmp_path, capsys):
-    _patch_fast_pipeline(monkeypatch)
-    smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
-    y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
-    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), num_conf=2, num_cpu=1, hopt=False, verbose=False)
-    model.train(smiles_train, y_train)
-
-    model._consensus_search = UnpicklableConsensus()
-    model.save()
-    assert "could not be serialized" in capsys.readouterr().out
-
-    loaded = MultiConformerRegressor.load(str(tmp_path / "out"))
-    assert loaded._consensus_search is None
-
-

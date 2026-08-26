@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 import os
-import pickle
 import shutil
 import tempfile
 import time
@@ -14,8 +13,31 @@ import numpy as np
 import pandas as pd
 import psutil
 
+from milearn.network.classifier import (BagNetworkClassifier,
+                                        InstanceNetworkClassifier,
+                                        AdditiveAttentionNetworkClassifier,
+                                        SelfAttentionNetworkClassifier,
+                                        HopfieldAttentionNetworkClassifier,
+                                        DynamicPoolingNetworkClassifier,
+                                        )
+
+from milearn.network.regressor import (BagNetworkRegressor,
+                                       InstanceNetworkRegressor,
+                                       AdditiveAttentionNetworkRegressor,
+                                       SelfAttentionNetworkRegressor,
+                                       HopfieldAttentionNetworkRegressor,
+                                       DynamicPoolingNetworkRegressor,
+                                        )
+
+from milearn.network.regressor import InstanceWrapperMLPNetworkRegressor, BagWrapperMLPNetworkRegressor
+from milearn.network.classifier import InstanceWrapperMLPNetworkClassifier, BagWrapperMLPNetworkClassifier
+
+from qsarmil.conformer.rdkit import RDKitConformerGenerator
+from qsarmil.descriptor.rdkit import RDKitAUTOCORR, RDKitGEOM, RDKitGETAWAY, RDKitMORSE, RDKitRDF, RDKitWHIM
+from qsarmil.descriptor.wrapper import DescriptorWrapper
+from molfeat.calc import ElectroShapeDescriptors, Pharmacophore3D, USRDescriptors
+
 from milearn.preprocessing import BagMinMaxScaler
-from milearn.wrapper import BagWrapper
 from rdkit import Chem, RDLogger
 from sklearn.model_selection import train_test_split
 from sklearn.utils.multiclass import type_of_target
@@ -25,8 +47,10 @@ from qsarmil.descriptor.wrapper import DescriptorWrapper
 
 from qsarmil.utils.logging import FailedConformer, FailedMolecule, OutputSuppressor, print_step_header
 
-RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
+
+
+RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 _VALID_ACCELERATORS = ("cpu", "gpu")
 
 
@@ -40,106 +64,43 @@ def _validate_accelerator(accelerator: str) -> str:
 # ==========================================================
 # Configuration
 # ==========================================================
-def model_factory(module_name: str, class_name: str, /, *args: Any, **kwargs: Any) -> Any:
-    is_milearn = module_name.startswith("milearn.")
+DESCRIPTORS = {
+    "RDKitGEOM": DescriptorWrapper(RDKitGEOM()),
+    "RDKitAUTOCORR": DescriptorWrapper(RDKitAUTOCORR()),
+    "RDKitRDF": DescriptorWrapper(RDKitRDF()),
+    "RDKitMORSE": DescriptorWrapper(RDKitMORSE()),
+    "RDKitWHIM": DescriptorWrapper(RDKitWHIM()),
+    "MolFeatUSRD": DescriptorWrapper(USRDescriptors()),
+    "MolFeatElectroShape": DescriptorWrapper(ElectroShapeDescriptors()),
+    "RDKitGETAWAY": DescriptorWrapper(RDKitGETAWAY()),
+    "MolFeatPmapper": DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
+}
 
-    def build(accelerator: str | None = None) -> Any:
-        cls = getattr(import_module(module_name), class_name)
-        call_kwargs = dict(kwargs)
-        if is_milearn and accelerator is not None:
-            call_kwargs["accelerator"] = accelerator
-        # wrap non-MIL models
-        if not is_milearn:
-            return BagWrapper(cls(*args, **call_kwargs))
-        return cls(*args, **call_kwargs)
+REGRESSORS = {
+    # mil wrappers
+    "MeanInstanceWrapperMLPNetworkRegressor": InstanceWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanBagWrapperMLPNetworkRegressor": BagWrapperMLPNetworkRegressor(pool="mean"),
+    # mil networks
+    "MeanBagNetworkRegressor": BagNetworkRegressor(pool="mean"),
+    "MeanInstanceNetworkRegressor": InstanceNetworkRegressor(pool="mean"),
+    "AdditiveAttentionNetworkRegressor": AdditiveAttentionNetworkRegressor(),
+    "SelfAttentionNetworkRegressor": SelfAttentionNetworkRegressor(),
+    "HopfieldAttentionNetworkRegressor": HopfieldAttentionNetworkRegressor(),
+    "DynamicPoolingNetworkRegressor": DynamicPoolingNetworkRegressor(),
+}
 
-    return build
-
-def descriptor_factory(
-    module_name: str, class_name: str, /, *args: Any, **kwargs: Any
-) -> Callable[[], DescriptorWrapper]:
-    def build() -> DescriptorWrapper:
-        cls = getattr(import_module(module_name), class_name)
-        return DescriptorWrapper(cls(*args, **kwargs))
-
-    return build
-
-def _DESCRIPTORS() -> dict[str, Callable[[], DescriptorWrapper]]:
-
-
-    return {
-        "RDKitGEOM": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitGEOM"),
-        "RDKitAUTOCORR": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitAUTOCORR"),
-        "RDKitRDF": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitRDF"),
-        "RDKitMORSE": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitMORSE"),
-        "RDKitWHIM": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitWHIM"),
-        "MolFeatUSRD": descriptor_factory("molfeat.calc", "USRDescriptors"),
-        "MolFeatElectroShape": descriptor_factory("molfeat.calc", "ElectroShapeDescriptors"),
-        "RDKitGETAWAY": descriptor_factory("qsarmil.descriptor.rdkit", "RDKitGETAWAY"),
-        "MolFeatPmapper": descriptor_factory("molfeat.calc", "Pharmacophore3D", factory="pmapper"),
-    }
-
-
-DESCRIPTORS = _DESCRIPTORS()
-
-def _REGRESSORS() -> dict[str, Any]:
-    return {
-        # mil wrappers
-        "MeanInstanceWrapperMLPNetworkRegressor": model_factory(
-            "milearn.network.regressor", "InstanceWrapperMLPNetworkRegressor", pool="mean"
-        ),
-        "MeanBagWrapperMLPNetworkRegressor": model_factory(
-            "milearn.network.regressor", "BagWrapperMLPNetworkRegressor", pool="mean"
-        ),
-        # mil networks
-        "MeanBagNetworkRegressor": model_factory("milearn.network.regressor", "BagNetworkRegressor", pool="mean"),
-        "MeanInstanceNetworkRegressor": model_factory(
-            "milearn.network.regressor", "InstanceNetworkRegressor", pool="mean"
-        ),
-        "AdditiveAttentionNetworkRegressor": model_factory(
-            "milearn.network.regressor", "AdditiveAttentionNetworkRegressor"
-        ),
-        "SelfAttentionNetworkRegressor": model_factory("milearn.network.regressor", "SelfAttentionNetworkRegressor"),
-        "HopfieldAttentionNetworkRegressor": model_factory(
-            "milearn.network.regressor", "HopfieldAttentionNetworkRegressor"
-        ),
-        "DynamicPoolingNetworkRegressor": model_factory("milearn.network.regressor", "DynamicPoolingNetworkRegressor"),
-    }
-
-
-def _CLASSIFIERS() -> dict[str, Any]:
-    return {
-        # mil wrappers
-        "MeanInstanceWrapperMLPNetworkClassifier": model_factory(
-            "milearn.network.classifier", "InstanceWrapperMLPNetworkClassifier", pool="mean"
-        ),
-        "MeanBagWrapperMLPNetworkClassifier": model_factory(
-            "milearn.network.classifier", "BagWrapperMLPNetworkClassifier", pool="mean"
-        ),
-        # mil networks
-        "MeanBagNetworkClassifier": model_factory("milearn.network.classifier", "BagNetworkClassifier", pool="mean"),
-        "MeanInstanceNetworkClassifier": model_factory(
-            "milearn.network.classifier", "InstanceNetworkClassifier", pool="mean"
-        ),
-        "AdditiveAttentionNetworkClassifier": model_factory(
-            "milearn.network.classifier", "AdditiveAttentionNetworkClassifier"
-        ),
-        "SelfAttentionNetworkClassifier": model_factory(
-            "milearn.network.classifier", "SelfAttentionNetworkClassifier"
-        ),
-        "HopfieldAttentionNetworkClassifier": model_factory(
-            "milearn.network.classifier", "HopfieldAttentionNetworkClassifier"
-        ),
-        "DynamicPoolingNetworkClassifier": model_factory(
-            "milearn.network.classifier", "DynamicPoolingNetworkClassifier"
-        ),
-    }
-
-# Lazy estimator mappings. The dictionaries are built eagerly, but each value
-# remains a zero-argument factory so the actual estimator import/instantiation
-# only happens when ``factory()`` is reached during training.
-REGRESSORS = _REGRESSORS()
-CLASSIFIERS = _CLASSIFIERS()
+CLASSIFIERS =  {
+    # mil wrappers
+    "MeanInstanceWrapperMLPNetworkClassifier": InstanceWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanBagWrapperMLPNetworkClassifier": BagWrapperMLPNetworkClassifier(pool="mean"),
+    # mil networks
+    "MeanBagNetworkClassifier": BagNetworkClassifier(pool="mean"),
+    "MeanInstanceNetworkClassifier": InstanceNetworkClassifier(pool="mean"),
+    "AdditiveAttentionNetworkClassifier": AdditiveAttentionNetworkClassifier(),
+    "SelfAttentionNetworkClassifier": SelfAttentionNetworkClassifier(),
+    "HopfieldAttentionNetworkClassifier": HopfieldAttentionNetworkClassifier(),
+    "DynamicPoolingNetworkClassifier": DynamicPoolingNetworkClassifier(),
+}
 
 DEFAULT_PARAM_GRID = {
     # Fixed hparams
@@ -341,10 +302,8 @@ def build_model(
 class LazyMIL:
     """Train every built-in descriptor/estimator combination on one dataset; use predict() for new data.
 
-    Trained estimators are streamed straight to disk (``{output_folder}/models.pkl``) as each one finishes,
-    rather than kept in memory - training all 9 descriptor types x 8 estimators means ~72 fitted models, and
-    only a handful are typically needed afterward (e.g. by a consensus search), so keeping every one resident
-    in memory for the whole run doesn't scale. Descriptor calculators, being far cheaper, are kept normally.
+    Trains, then predicts, within the same process/session - there's no serialization; all fitted models
+    and descriptor calculators are kept in memory for the lifetime of this object.
     """
 
     def __init__(
@@ -387,50 +346,18 @@ class LazyMIL:
             shutil.rmtree(self.output_folder)
         os.makedirs(self.output_folder)
 
-        # Populated by run(); reused by predict(). The ~72 fitted estimators
-        # themselves are never held here - see models_path().
+        # Populated by run(); reused by predict() within the same process -
+        # no persistence to disk, so nothing here survives past this object.
+        self._trained_models: dict[str, dict[str, Any]] = {}
         self._fitted_descriptors: dict[str, DescriptorWrapper] = {}
         self._task_type: str | None = None
         self._train_fallback: Any = None
-        self._n_trained_models = 0
 
     @property
     def is_trained(self) -> bool:
         """Whether :meth:`run` has produced at least one trained model."""
 
-        return self._n_trained_models > 0
-
-    def models_path(self) -> str:
-        """Path to the file holding every trained (estimator, scaler) pair, one appended per model."""
-
-        return os.path.join(self.output_folder, "models.pkl")
-
-    def _ensure_estimator_predict_ready(self, estimator_instance: Any, accelerator: str) -> None:
-        """Rebuild a milearn estimator's runtime trainer (on ``accelerator``) after unpickling."""
-
-        module_name = estimator_instance.__class__.__module__
-        if not module_name.startswith("milearn."):
-            return
-
-        if not hasattr(estimator_instance, "_trainer"):
-            return
-
-        if estimator_instance._trainer is not None:
-            return
-
-        import pytorch_lightning as pl
-
-        hparams = estimator_instance.hparams
-        estimator_instance._trainer = pl.Trainer(
-            max_epochs=getattr(hparams, "max_epochs", 1),
-            callbacks=[],
-            logger=False,
-            accelerator=accelerator,
-            enable_model_summary=False,
-            enable_progress_bar=False,
-            enable_checkpointing=False,
-            deterministic=True,
-        )
+        return bool(self._trained_models)
 
     def run(self, smiles: Sequence[str], y: Sequence[Any]) -> None:
         """Train every descriptor/estimator combination and write predictions to CSV.
@@ -440,8 +367,7 @@ class LazyMIL:
             y (Sequence[Any]): Target property value for each SMILES, same length and order as ``smiles``.
 
         Returns:
-            None. Writes ``train.csv``/``val.csv`` and ``models.pkl`` to ``self.output_folder``; use
-            :meth:`predict` for new data.
+            None. Writes ``train.csv``/``val.csv`` to ``self.output_folder``; use :meth:`predict` for new data.
         """
 
         smi_all, y_all = list(smiles), list(y)
@@ -507,66 +433,52 @@ class LazyMIL:
             if self.verbose:
                 _print_progress_item(d_i, len(DESCRIPTORS), f"{desc_name}:", elapsed_min, mem_gb)
 
-        # 7. Train every descriptor/estimator combination, streaming each
-        #    fitted model straight to disk instead of keeping it in memory.
+        # 7. Train every descriptor/estimator combination.
         if self.verbose:
             print_step_header(4, "Individual model building")
 
         total_models = len(DESCRIPTORS) * len(estimators_source)
         current_model = 0
-        self._n_trained_models = 0
+        self._trained_models = {}
 
-        with open(self.models_path(), "wb") as models_file:
-            for desc_name, (x_train, x_val) in per_descriptor.items():
-                for est_name, factory in estimators_source.items():
-                    estimator = factory(accelerator=self.accelerator)
+        for desc_name, (x_train, x_val) in per_descriptor.items():
+            for est_name, factory in estimators_source.items():
+                estimator = factory(accelerator=self.accelerator)
 
-                    model_name = f"{desc_name}|{est_name}"
-                    current_model += 1
+                model_name = f"{desc_name}|{est_name}"
+                current_model += 1
 
-                    start = time.time()
-                    with OutputSuppressor():
-                        pred_train, pred_val, fitted_estimator, fitted_scaler = build_model(
-                            x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
-                            accelerator=self.accelerator,
-                        )
-                    elapsed_min = (time.time() - start) / 60
-                    mem_gb = psutil.Process().memory_info().rss / (1024**3)
-
-                    pickle.dump(
-                        {
-                            "model_name": model_name,
-                            "descriptor": desc_name,
-                            "estimator": fitted_estimator,
-                            "scaler": fitted_scaler,
-                        },
-                        models_file,
+                start = time.time()
+                with OutputSuppressor():
+                    pred_train, pred_val, fitted_estimator, fitted_scaler = build_model(
+                        x_train, x_val, y_train, y_val, estimator, self.hopt, seed=self.seed,
+                        accelerator=self.accelerator,
                     )
-                    self._n_trained_models += 1
-                    del fitted_estimator, fitted_scaler  # don't keep this model resident once it's on disk
+                elapsed_min = (time.time() - start) / 60
+                mem_gb = psutil.Process().memory_info().rss / (1024**3)
 
-                    # Write predictions
-                    result_df_train[model_name] = pred_train
-                    result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
+                self._trained_models[model_name] = {
+                    "descriptor": desc_name,
+                    "estimator": fitted_estimator,
+                    "scaler": fitted_scaler,
+                }
 
-                    result_df_val[model_name] = pred_val
-                    result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
+                # Write predictions
+                result_df_train[model_name] = pred_train
+                result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
 
-                    if self.verbose:
-                        _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
+                result_df_val[model_name] = pred_val
+                result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)
 
-    def predict(self, smiles: Sequence[str], save: bool = False, accelerator: str | None = None) -> pd.DataFrame:
-        """Run inference from persisted fitted models, imputing molecules that fail with :attr:`_train_fallback`.
+                if self.verbose:
+                    _print_progress_item(current_model, total_models, model_name, elapsed_min, mem_gb)
 
-        Descriptors are (re)computed for every descriptor type on every call - this is deliberately not
-        selective, since descriptor calculation is cheap relative to the network predictions that follow.
+    def predict(self, smiles: Sequence[str], save: bool = False) -> pd.DataFrame:
+        """Run inference from in-memory fitted models, imputing molecules that fail with :attr:`_train_fallback`.
 
         Args:
             smiles (Sequence[str]): SMILES strings to predict on.
             save (bool): Whether to also write the result to ``test.csv`` in ``self.output_folder``.
-            accelerator (str, optional): ``"cpu"`` or ``"gpu"`` to run inference on, overriding
-                :attr:`accelerator` for this call only - e.g. predict on CPU for a model trained on GPU.
-                Defaults to :attr:`accelerator` (the value set at construction/training time).
 
         Returns:
             pd.DataFrame: A ``SMILES`` column plus one prediction column per trained descriptor/estimator combo.
@@ -574,8 +486,6 @@ class LazyMIL:
 
         if not self.is_trained:
             raise RuntimeError("LazyMIL is not trained. Call `run` first.")
-
-        accelerator = _validate_accelerator(accelerator if accelerator is not None else self.accelerator)
 
         smi_test = list(smiles)
         result_df_test = pd.DataFrame({"SMILES": smi_test})
@@ -597,35 +507,25 @@ class LazyMIL:
         valid_smi = [smi for smi, c in zip(smi_test, confs) if smi not in failed_smiles]
         valid_confs = [c for smi, c in zip(smi_test, confs) if smi not in failed_smiles]
 
+        descriptor_names = {model_state["descriptor"] for model_state in self._trained_models.values()}
         x_by_descriptor: dict[str, list[np.ndarray]] = {}
         if valid_confs:
-            for desc_name, desc_calc in self._fitted_descriptors.items():
+            for desc_name in descriptor_names:
+                desc_calc = self._fitted_descriptors[desc_name]
                 x_by_descriptor[desc_name] = calc_descriptors(valid_confs, desc_calc)
 
-        with open(self.models_path(), "rb") as models_file:
-            while True:
-                try:
-                    record = pickle.load(models_file)
-                except EOFError:
-                    break
+        for model_name, model_state in self._trained_models.items():
+            desc_name = model_state["descriptor"]
 
-                model_name, desc_name = record["model_name"], record["descriptor"]
-                if desc_name not in self._fitted_descriptors:
-                    raise ValueError(
-                        f"Model '{model_name}' references descriptor '{desc_name}', which has no fitted "
-                        "calculator - models.pkl may be out of sync with this LazyMIL's saved state."
-                    )
+            preds_by_smi: dict[str, Any] = {}
+            if valid_smi:
+                x_test = x_by_descriptor[desc_name]
+                x_test_scaled = model_state["scaler"].transform(x_test)
+                with OutputSuppressor():
+                    preds = model_state["estimator"].predict(x_test_scaled)
+                preds_by_smi = dict(zip(valid_smi, preds))
 
-                preds_by_smi: dict[str, Any] = {}
-                if valid_smi:
-                    x_test = x_by_descriptor[desc_name]
-                    x_test_scaled = record["scaler"].transform(x_test)
-                    with OutputSuppressor():
-                        self._ensure_estimator_predict_ready(record["estimator"], accelerator)
-                        preds = record["estimator"].predict(x_test_scaled)
-                    preds_by_smi = dict(zip(valid_smi, preds))
-
-                result_df_test[model_name] = [preds_by_smi.get(smi, self._train_fallback) for smi in smi_test]
+            result_df_test[model_name] = [preds_by_smi.get(smi, self._train_fallback) for smi in smi_test]
 
         if save:
             result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
