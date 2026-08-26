@@ -211,6 +211,14 @@ def test_train_estimator_hopt_path():
     assert estimator.hopt_called is True
 
 
+def test_train_estimator_forces_accelerator_into_hopt_grid():
+    """The explicit accelerator must win over HYPERPARAMETERS' own fixed value."""
+    x_train, x_val, x_test, y_train, y_val = _tiny_bags()
+    estimator = MockEstimator(supports_hopt=True)
+    train_estimator(x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, accelerator="gpu")
+    assert estimator.last_param_grid["accelerator"] == "gpu"
+
+
 # ---------------------------------------------------------------------------
 # DESCRIPTORS / REGRESSORS / CLASSIFIERS - built-in factory dicts
 # ---------------------------------------------------------------------------
@@ -261,6 +269,16 @@ def test_default_regressor_factories_are_independent_instances():
 def test_lazymil_init_default_creates_temp_dir():
     lazy = LazyMIL(task="continuous")
     assert os.path.isdir(lazy.output_folder)
+
+
+def test_lazymil_accelerator_defaults_to_cpu():
+    lazy = LazyMIL(task="continuous")
+    assert lazy.accelerator == "cpu"
+
+
+def test_lazymil_accelerator_explicit_override(tmp_path):
+    lazy = LazyMIL(task="continuous", output_folder=str(tmp_path / "out"), accelerator="gpu")
+    assert lazy.accelerator == "gpu"
 
 
 def test_lazymil_init_sets_estimators_from_task():
@@ -343,6 +361,25 @@ def test_lazymil_run_binary_quiet(monkeypatch, tmp_path):
     )
     lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
     lazy.run(smi_train, y_train, smi_val, y_val, ["CCF"])
+
+
+def test_lazymil_run_threads_accelerator_into_estimator_construction(monkeypatch, tmp_path):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+    mock = MockEstimator(supports_hopt=False)
+
+    smi_train = ["CCO", "c1ccccc1", "CCN", "CCC"]
+    y_train = [1.1, 2.2, 3.3, 4.4]
+    smi_val = ["CCCl"]
+    y_val = [5.5]
+
+    lazy = LazyMIL(
+        task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"),
+        verbose=False, accelerator="gpu",
+    )
+    lazy.ESTIMATORS = {"Mock": mock}
+    lazy.run(smi_train, y_train, smi_val, y_val, ["CCF"])
+
+    assert mock.accelerator == "gpu"
 
 
 def test_lazymil_run_splits_are_taken_as_given(monkeypatch, tmp_path):

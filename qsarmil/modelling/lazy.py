@@ -63,31 +63,59 @@ DESCRIPTORS: dict[str, Callable[[], DescriptorWrapper]] = {
 
 # Same reasoning as DESCRIPTORS above: factories, not instances, so every run() call and every
 # descriptor gets its own fresh estimator rather than 9 descriptors overwriting one shared model.
-# No accelerator to thread through either - every estimator trains on CPU by default.
-REGRESSORS: dict[str, Callable[[], Any]] = {
+# accelerator is threaded through explicitly (default "cpu") so LazyMIL can pass its own setting in.
+REGRESSORS: dict[str, Callable[..., Any]] = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkRegressor": lambda: InstanceWrapperMLPNetworkRegressor(pool="mean"),
-    "MeanBagWrapperMLPNetworkRegressor": lambda: BagWrapperMLPNetworkRegressor(pool="mean"),
+    "MeanInstanceWrapperMLPNetworkRegressor": lambda accelerator="cpu": InstanceWrapperMLPNetworkRegressor(
+        pool="mean", accelerator=accelerator
+    ),
+    "MeanBagWrapperMLPNetworkRegressor": lambda accelerator="cpu": BagWrapperMLPNetworkRegressor(
+        pool="mean", accelerator=accelerator
+    ),
     # mil networks
-    "MeanBagNetworkRegressor": lambda: BagNetworkRegressor(pool="mean"),
-    "MeanInstanceNetworkRegressor": lambda: InstanceNetworkRegressor(pool="mean"),
-    "AdditiveAttentionNetworkRegressor": lambda: AdditiveAttentionNetworkRegressor(),
-    "SelfAttentionNetworkRegressor": lambda: SelfAttentionNetworkRegressor(),
-    "HopfieldAttentionNetworkRegressor": lambda: HopfieldAttentionNetworkRegressor(),
-    "DynamicPoolingNetworkRegressor": lambda: DynamicPoolingNetworkRegressor(),
+    "MeanBagNetworkRegressor": lambda accelerator="cpu": BagNetworkRegressor(pool="mean", accelerator=accelerator),
+    "MeanInstanceNetworkRegressor": lambda accelerator="cpu": InstanceNetworkRegressor(
+        pool="mean", accelerator=accelerator
+    ),
+    "AdditiveAttentionNetworkRegressor": lambda accelerator="cpu": AdditiveAttentionNetworkRegressor(
+        accelerator=accelerator
+    ),
+    "SelfAttentionNetworkRegressor": lambda accelerator="cpu": SelfAttentionNetworkRegressor(
+        accelerator=accelerator
+    ),
+    "HopfieldAttentionNetworkRegressor": lambda accelerator="cpu": HopfieldAttentionNetworkRegressor(
+        accelerator=accelerator
+    ),
+    "DynamicPoolingNetworkRegressor": lambda accelerator="cpu": DynamicPoolingNetworkRegressor(
+        accelerator=accelerator
+    ),
 }
 
-CLASSIFIERS: dict[str, Callable[[], Any]] = {
+CLASSIFIERS: dict[str, Callable[..., Any]] = {
     # mil wrappers
-    "MeanInstanceWrapperMLPNetworkClassifier": lambda: InstanceWrapperMLPNetworkClassifier(pool="mean"),
-    "MeanBagWrapperMLPNetworkClassifier": lambda: BagWrapperMLPNetworkClassifier(pool="mean"),
+    "MeanInstanceWrapperMLPNetworkClassifier": lambda accelerator="cpu": InstanceWrapperMLPNetworkClassifier(
+        pool="mean", accelerator=accelerator
+    ),
+    "MeanBagWrapperMLPNetworkClassifier": lambda accelerator="cpu": BagWrapperMLPNetworkClassifier(
+        pool="mean", accelerator=accelerator
+    ),
     # mil networks
-    "MeanBagNetworkClassifier": lambda: BagNetworkClassifier(pool="mean"),
-    "MeanInstanceNetworkClassifier": lambda: InstanceNetworkClassifier(pool="mean"),
-    "AdditiveAttentionNetworkClassifier": lambda: AdditiveAttentionNetworkClassifier(),
-    "SelfAttentionNetworkClassifier": lambda: SelfAttentionNetworkClassifier(),
-    "HopfieldAttentionNetworkClassifier": lambda: HopfieldAttentionNetworkClassifier(),
-    "DynamicPoolingNetworkClassifier": lambda: DynamicPoolingNetworkClassifier(),
+    "MeanBagNetworkClassifier": lambda accelerator="cpu": BagNetworkClassifier(pool="mean", accelerator=accelerator),
+    "MeanInstanceNetworkClassifier": lambda accelerator="cpu": InstanceNetworkClassifier(
+        pool="mean", accelerator=accelerator
+    ),
+    "AdditiveAttentionNetworkClassifier": lambda accelerator="cpu": AdditiveAttentionNetworkClassifier(
+        accelerator=accelerator
+    ),
+    "SelfAttentionNetworkClassifier": lambda accelerator="cpu": SelfAttentionNetworkClassifier(
+        accelerator=accelerator
+    ),
+    "HopfieldAttentionNetworkClassifier": lambda accelerator="cpu": HopfieldAttentionNetworkClassifier(
+        accelerator=accelerator
+    ),
+    "DynamicPoolingNetworkClassifier": lambda accelerator="cpu": DynamicPoolingNetworkClassifier(
+        accelerator=accelerator
+    ),
 }
 
 HYPERPARAMETERS = {
@@ -213,6 +241,7 @@ def train_estimator(
     estimator_instance: Any,
     hopt: bool = True,
     seed: int = 42,
+    accelerator: str = "cpu",
 ) -> tuple[list[Any], list[Any], list[Any]]:
     """Fit one estimator, refit on train+val, and predict on train/val/test - all in one call.
 
@@ -228,6 +257,8 @@ def train_estimator(
         estimator_instance: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
         hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting, if supported.
         seed (int): Random seed passed to the estimator's hyperparameter search.
+        accelerator (str): ``"cpu"``/``"gpu"``, forced into the hopt search grid so it can't be
+            silently overridden by ``HYPERPARAMETERS``'s own fixed value.
 
     Returns:
         tuple: ``(pred_train, pred_val, pred_test)``. ``pred_train``/``pred_val`` come from the
@@ -239,7 +270,7 @@ def train_estimator(
 
     # 2. Optimize hyperparameters
     if hopt and hasattr(estimator_instance, "hopt"):
-        param_grid = {**HYPERPARAMETERS, "random_seed": seed}
+        param_grid = {**HYPERPARAMETERS, "random_seed": seed, "accelerator": accelerator}
         estimator_instance.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
 
     # 3. Train on train split only (not final training yet)
@@ -273,6 +304,7 @@ class LazyMIL:
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
+        accelerator: str = "cpu",
     ) -> None:
         """Store settings and (re)create the output folder.
 
@@ -286,6 +318,8 @@ class LazyMIL:
             output_folder (str, optional): Output directory; a fresh temp dir is created and wiped if omitted/exists.
             verbose (bool): Whether to print per-step progress.
             seed (int): Random seed for embedding and hyperparameter search.
+            accelerator (str): ``"cpu"`` or ``"gpu"``, passed straight through to every estimator
+                (construction and hyperparameter search alike).
         """
         self.task = task
         self.ESTIMATORS = REGRESSORS if task == "continuous" else CLASSIFIERS
@@ -295,6 +329,7 @@ class LazyMIL:
         self.num_cpu = num_cpu
         self.verbose = verbose
         self.seed = seed
+        self.accelerator = accelerator
 
         if os.path.exists(self.output_folder):
             shutil.rmtree(self.output_folder)
@@ -405,13 +440,14 @@ class LazyMIL:
 
         for desc_name, (x_train, x_val, x_test) in ready_descriptors.items():
             for est_name, factory in self.ESTIMATORS.items():
-                estimator = factory()
+                estimator = factory(accelerator=self.accelerator)
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
 
                 with OutputSuppressor():
                     pred_train, pred_val, pred_test = train_estimator(
-                        x_train, x_val, x_test, y_train, y_val, estimator, self.hopt, seed=self.seed
+                        x_train, x_val, x_test, y_train, y_val, estimator, self.hopt, seed=self.seed,
+                        accelerator=self.accelerator,
                     )
 
                 preds_by_smi = dict(zip(smi_test_valid, pred_test))

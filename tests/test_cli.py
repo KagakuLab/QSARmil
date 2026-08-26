@@ -4,6 +4,7 @@ from click.testing import CliRunner
 from conftest import MockEstimator
 
 import qsarmil.cli as cli_mod
+import qsarmil.cli.train_predict as cli_train_predict_mod
 import qsarmil.modelling.lazy as lazy_mod
 import qsarmil.modelling.meta as meta_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
@@ -245,6 +246,70 @@ def test_train_predict_quiet_by_default(monkeypatch, tmp_path, regression_csv):
     assert result.exit_code == 0, result.output
     assert "Step-1" not in result.output
     assert "Predictions saved to" in result.output
+
+
+def test_train_predict_accelerator_choice_is_forwarded(monkeypatch, tmp_path, regression_csv):
+    _patch_fast_pipeline(monkeypatch)
+    captured_kwargs = {}
+    original_init = cli_train_predict_mod.MultiConformerRegressor.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(cli_train_predict_mod.MultiConformerRegressor, "__init__", spy_init)
+
+    runner = CliRunner()
+    output_folder = tmp_path / "mcfm"
+    output_file = tmp_path / "predictions.csv"
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "train_predict",
+            "--train-path",
+            str(regression_csv),
+            "--test-path",
+            str(regression_csv),
+            "--task-type",
+            "regression",
+            "--output-folder",
+            str(output_folder),
+            "--output-file",
+            str(output_file),
+            "--num-conf",
+            "2",
+            "--num-cpu",
+            "1",
+            "--accelerator",
+            "gpu",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured_kwargs["accelerator"] == "gpu"
+
+
+def test_train_predict_accelerator_rejects_auto(tmp_path, regression_csv):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "train_predict",
+            "--train-path",
+            str(regression_csv),
+            "--test-path",
+            str(regression_csv),
+            "--task-type",
+            "regression",
+            "--output-folder",
+            str(tmp_path / "mcfm"),
+            "--output-file",
+            str(tmp_path / "predictions.csv"),
+            "--accelerator",
+            "auto",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "auto" in result.output.lower()
 
 
 def test_cli_help_and_version():

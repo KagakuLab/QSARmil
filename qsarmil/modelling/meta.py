@@ -32,6 +32,7 @@ class MultiConformerEstimator:
         output_folder: str | None = None,
         verbose: bool = True,
         seed: int = 42,
+        accelerator: str = "cpu",
     ) -> None:
         """Build the underlying LazyMIL with these settings; see :class:`~qsarmil.modelling.lazy.LazyMIL`.
 
@@ -42,6 +43,8 @@ class MultiConformerEstimator:
             output_folder (str, optional): Directory for the model's files; a fresh temp dir is created if omitted.
             verbose (bool): Whether to print progress from the underlying steps.
             seed (int): Random seed for the train/val split and everything LazyMIL seeds internally.
+            accelerator (str): ``"cpu"`` or ``"gpu"`` - passed straight through to LazyMIL, which
+                threads it into every estimator's construction and hyperparameter search.
         """
         super().__init__()
 
@@ -55,6 +58,7 @@ class MultiConformerEstimator:
             output_folder=output_folder,
             verbose=verbose,
             seed=seed,
+            accelerator=accelerator,
         )
         self.best_consensus: list[str] = []
         self._consensus_search: Any | None = None

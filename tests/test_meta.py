@@ -76,6 +76,12 @@ def test_init_default_creates_temp_dir():
     model = MultiConformerRegressor()
     assert os.path.isdir(model.output_folder)
     assert model._lazy_model.seed == 42
+    assert model._lazy_model.accelerator == "cpu"
+
+
+def test_init_forwards_accelerator_to_lazy_model(tmp_path):
+    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"), accelerator="gpu")
+    assert model._lazy_model.accelerator == "gpu"
 
 
 def test_train_predict_end_to_end_regression(monkeypatch, tmp_path, capsys):
