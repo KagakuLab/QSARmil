@@ -83,4 +83,4 @@ Tutorials
 Documentation
 --------------------------
 
-Full documentation is available at `kagakulab.github.io/qsarmil <https://kagakulab.github.io/qsarmil/>`_.
+Full documentation is available at `QSARmil docs <https://kagakulab.github.io/QSARmil/>`_.
