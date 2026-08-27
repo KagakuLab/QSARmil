@@ -1,18 +1,18 @@
+import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
-import pytest
 
-from qsarmil.conformer.rdkit import RDKitConformerGenerator, split_into_conformers, filter_by_energy
-from qsarmil.utils.logging import FailedConformer, FailedMolecule
+from qsarmil.conformer.rdkit import RDKitConformerGenerator, filter_by_energy
+from qsarmil.utils.logging import FailedMolecule
 
 
 def test_rdkit_conformer_generator_forwards_params():
-    gen = RDKitConformerGenerator(num_conf=3, e_thresh=2, num_cpu=1, verbose=False, seed=7)
+    gen = RDKitConformerGenerator(num_conf=3, e_thresh=2, num_cpu=1, verbose=False, random_seed=7)
     assert gen.num_conf == 3
     assert gen.e_thresh == 2
     assert gen.num_cpu == 1
     assert gen.verbose is False
-    assert gen.seed == 7
+    assert gen.random_seed == 7
 
 
 def test_split_into_conformers_one_mol_per_embedded_conformer():
@@ -22,7 +22,8 @@ def test_split_into_conformers_one_mol_per_embedded_conformer():
     params.randomSeed = 42
     AllChem.EmbedMultipleConfs(mol, numConfs=3, params=params)
 
-    bag = split_into_conformers(mol)
+    gen = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
+    bag = gen._split_into_conformers(mol)
 
     assert isinstance(bag, list)
     assert len(bag) == 3
@@ -40,8 +41,7 @@ def test_run_embeds_conformers_for_valid_molecules():
 
 
 def test_run_prints_progress_with_multiple_workers(capsys):
-    """joblib only invokes the batch-completion print callback with more
-    than one worker and enough jobs to actually batch."""
+    """joblib only invokes the batch-completion print callback with more than one worker and enough jobs."""
     gen = RDKitConformerGenerator(num_conf=2, num_cpu=2, verbose=True)
     mols = [Chem.MolFromSmiles(s) for s in ["CCO", "CCN", "CCC", "CCCl", "CCF", "CCBr"]]
     results = gen.run(mols)
@@ -59,48 +59,50 @@ def test_run_applies_e_thresh_filtering():
     assert len(results[0]) <= 10
 
 
-def test_run_none_input_returns_failed_conformer():
-    """A None input becomes a FailedConformer(None) and is passed through
-    by run() rather than raised - LazyMIL now handles such failures itself
-    (see report_smiles_parsing / report_conformer_generation / target_fallback
-    in qsarmil.modelling.lazy)."""
+def test_run_none_input_becomes_failed_molecule():
+    """A bare None (e.g. from a failed Chem.MolFromSmiles upstream) is passed through, not raised."""
     gen = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
     results = gen.run([None])
     assert len(results) == 1
-    assert isinstance(results[0], FailedConformer)
+    assert isinstance(results[0], FailedMolecule)
 
 
 def test_run_mixed_batch_passes_through_failures():
-    """One bad molecule in a batch doesn't stop the good ones from being
-    embedded, and isn't wrapped into any special type."""
+    """One bad molecule in a batch doesn't stop the good ones from being embedded."""
     gen = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
     mol = Chem.MolFromSmiles("CCO")
     results = gen.run([mol, None])
     assert len(results) == 2
     assert isinstance(results[0], list)
-    assert isinstance(results[1], FailedConformer)
+    assert isinstance(results[1], FailedMolecule)
 
 
-def test_generate_conformers_passes_through_failed_sentinels():
+def test_generate_conformers_passes_through_failed_molecule():
     gen = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
-    failed = FailedMolecule("garbage")
+    failed = FailedMolecule("garbage", message="SMILES parsing failed")
     assert gen._generate_conformers(failed) is failed
-    failed_conf = FailedConformer(None)
-    assert gen._generate_conformers(failed_conf) is failed_conf
+
+
+def test_generate_conformers_none_becomes_failed_molecule():
+    gen = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False)
+    result = gen._generate_conformers(None)
+    assert isinstance(result, FailedMolecule)
+    assert result.message == "SMILES parsing failed"
 
 
 def test_generate_conformers_zero_num_conf_reports_failure():
     gen = RDKitConformerGenerator(num_conf=0, num_cpu=1, verbose=False)
     mol = Chem.MolFromSmiles("CCO")
     result = gen._generate_conformers(mol)
-    assert isinstance(result, FailedConformer)
+    assert isinstance(result, FailedMolecule)
+    assert result.message == "conformer generation failed"
 
 
-def test_seed_changes_embedding_output():
+def test_random_seed_changes_embedding_output():
     mol_a = Chem.MolFromSmiles("CC(C)Cc1ccc(cc1)C(C)C(=O)O")
     mol_b = Chem.MolFromSmiles("CC(C)Cc1ccc(cc1)C(C)C(=O)O")
-    gen_a = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False, seed=42)
-    gen_b = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False, seed=123)
+    gen_a = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False, random_seed=42)
+    gen_b = RDKitConformerGenerator(num_conf=3, num_cpu=1, verbose=False, random_seed=123)
     bag_a = gen_a.run([mol_a])[0]
     bag_b = gen_b.run([mol_b])[0]
     coords_a = bag_a[0].GetConformer(0).GetPositions()

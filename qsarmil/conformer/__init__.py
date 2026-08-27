@@ -1,1 +1,3 @@
-from .rdkit import RDKitConformerGenerator, split_into_conformers
+from .rdkit import RDKitConformerGenerator
+
+__all__ = ["RDKitConformerGenerator"]

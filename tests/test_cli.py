@@ -4,7 +4,6 @@ from click.testing import CliRunner
 from conftest import MockEstimator
 
 import qsarmil.cli as cli_mod
-import qsarmil.cli.train_predict as cli_train_predict_mod
 import qsarmil.modelling.lazy as lazy_mod
 import qsarmil.modelling.meta as meta_mod
 from qsarmil.descriptor.rdkit import RDKitGEOM
@@ -63,26 +62,17 @@ def test_train_predict_regression(monkeypatch, tmp_path, regression_csv):
     _patch_fast_pipeline(monkeypatch)
     runner = CliRunner()
     output_folder = tmp_path / "mcfm"
-    output_file = tmp_path / "predictions.csv"
 
     result = runner.invoke(
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(regression_csv),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(output_folder),
-            "--output-file",
-            str(output_file),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(output_folder),
+            "--num-conf", "2",
+            "--num-cpu", "1",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -90,74 +80,55 @@ def test_train_predict_regression(monkeypatch, tmp_path, regression_csv):
     assert (output_folder / "train.csv").exists()
     assert (output_folder / "val.csv").exists()
 
-    out_df = pd.read_csv(output_file)
-    assert "prediction" in out_df.columns
-    assert len(out_df) == 5
-    assert list(out_df["smiles"]) == ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
+    test_df = pd.read_csv(output_folder / "test.csv")
+    assert "prediction" in test_df.columns
+    assert len(test_df) == 5
+    assert list(test_df["SMILES"]) == ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
 
 
 def test_train_predict_classification(monkeypatch, tmp_path, classification_csv):
     _patch_fast_pipeline(monkeypatch, classifier=True)
     runner = CliRunner()
     output_folder = tmp_path / "mcfm"
-    output_file = tmp_path / "predictions.csv"
 
     result = runner.invoke(
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(classification_csv),
-            "--test-path",
-            str(classification_csv),
-            "--task-type",
-            "classification",
-            "--output-folder",
-            str(output_folder),
-            "--output-file",
-            str(output_file),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
+            "--train-path", str(classification_csv),
+            "--test-path", str(classification_csv),
+            "--task-type", "classification",
+            "--output-folder", str(output_folder),
+            "--num-conf", "2",
+            "--num-cpu", "1",
         ],
     )
     assert result.exit_code == 0, result.output
-    out_df = pd.read_csv(output_file)
-    assert "prediction" in out_df.columns
-    assert len(out_df) == 5
+    test_df = pd.read_csv(output_folder / "test.csv")
+    assert "prediction" in test_df.columns
+    assert len(test_df) == 5
 
 
 def test_train_predict_hopt_accepts_bool_value(monkeypatch, tmp_path, regression_csv):
     _patch_fast_pipeline(monkeypatch)
     runner = CliRunner()
     output_folder = tmp_path / "mcfm"
-    output_file = tmp_path / "predictions.csv"
 
     result = runner.invoke(
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(regression_csv),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(output_folder),
-            "--output-file",
-            str(output_file),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
-            "--hopt",
-            "False",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(output_folder),
+            "--num-conf", "2",
+            "--num-cpu", "1",
+            "--hopt", "False",
         ],
     )
     assert result.exit_code == 0, result.output
-    assert output_file.exists()
+    assert (output_folder / "test.csv").exists()
 
 
 def test_train_predict_missing_columns_raises(tmp_path, regression_csv):
@@ -170,46 +141,53 @@ def test_train_predict_missing_columns_raises(tmp_path, regression_csv):
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(path),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(tmp_path / "out"),
-            "--output-file",
-            str(tmp_path / "predictions.csv"),
+            "--train-path", str(path),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(tmp_path / "out"),
         ],
     )
     assert result.exit_code != 0
     assert "needs at least 2 columns" in result.output
 
 
-def test_train_predict_verbose_prints_progress(monkeypatch, tmp_path, regression_csv):
+def test_train_predict_output_folder_defaults_to_timestamped_folder(monkeypatch, tmp_path, regression_csv):
     _patch_fast_pipeline(monkeypatch)
+    monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    output_folder = tmp_path / "mcfm"
-    output_file = tmp_path / "predictions.csv"
 
     result = runner.invoke(
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(regression_csv),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(output_folder),
-            "--output-file",
-            str(output_file),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--num-conf", "2",
+            "--num-cpu", "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Predictions saved to" in result.output
+    # no --output-folder was given, so MultiConformerEstimator made up a timestamped one
+    assert "qsarmil_" in result.output
+
+
+def test_train_predict_verbose_prints_progress(monkeypatch, tmp_path, regression_csv):
+    _patch_fast_pipeline(monkeypatch)
+    runner = CliRunner()
+    output_folder = tmp_path / "mcfm"
+
+    result = runner.invoke(
+        cli_mod.cli,
+        [
+            "train_predict",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(output_folder),
+            "--num-conf", "2",
+            "--num-cpu", "1",
             "--verbose",
         ],
     )
@@ -221,26 +199,17 @@ def test_train_predict_quiet_by_default(monkeypatch, tmp_path, regression_csv):
     _patch_fast_pipeline(monkeypatch)
     runner = CliRunner()
     output_folder = tmp_path / "mcfm"
-    output_file = tmp_path / "predictions.csv"
 
     result = runner.invoke(
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(regression_csv),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(output_folder),
-            "--output-file",
-            str(output_file),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(output_folder),
+            "--num-conf", "2",
+            "--num-cpu", "1",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -248,44 +217,36 @@ def test_train_predict_quiet_by_default(monkeypatch, tmp_path, regression_csv):
     assert "Predictions saved to" in result.output
 
 
-def test_train_predict_accelerator_choice_is_forwarded(monkeypatch, tmp_path, regression_csv):
+def test_train_predict_random_seed_and_accelerator_are_forwarded(monkeypatch, tmp_path, regression_csv):
     _patch_fast_pipeline(monkeypatch)
     captured_kwargs = {}
-    original_init = cli_train_predict_mod.MultiConformerRegressor.__init__
+    original_init = cli_mod.MultiConformerRegressor.__init__
 
     def spy_init(self, *args, **kwargs):
         captured_kwargs.update(kwargs)
         return original_init(self, *args, **kwargs)
 
-    monkeypatch.setattr(cli_train_predict_mod.MultiConformerRegressor, "__init__", spy_init)
+    monkeypatch.setattr(cli_mod.MultiConformerRegressor, "__init__", spy_init)
 
     runner = CliRunner()
     output_folder = tmp_path / "mcfm"
-    output_file = tmp_path / "predictions.csv"
     result = runner.invoke(
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(regression_csv),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(output_folder),
-            "--output-file",
-            str(output_file),
-            "--num-conf",
-            "2",
-            "--num-cpu",
-            "1",
-            "--accelerator",
-            "gpu",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(output_folder),
+            "--num-conf", "2",
+            "--num-cpu", "1",
+            "--accelerator", "gpu",
+            "--random-seed", "7",
         ],
     )
     assert result.exit_code == 0, result.output
     assert captured_kwargs["accelerator"] == "gpu"
+    assert captured_kwargs["random_seed"] == 7
 
 
 def test_train_predict_accelerator_rejects_auto(tmp_path, regression_csv):
@@ -294,18 +255,11 @@ def test_train_predict_accelerator_rejects_auto(tmp_path, regression_csv):
         cli_mod.cli,
         [
             "train_predict",
-            "--train-path",
-            str(regression_csv),
-            "--test-path",
-            str(regression_csv),
-            "--task-type",
-            "regression",
-            "--output-folder",
-            str(tmp_path / "mcfm"),
-            "--output-file",
-            str(tmp_path / "predictions.csv"),
-            "--accelerator",
-            "auto",
+            "--train-path", str(regression_csv),
+            "--test-path", str(regression_csv),
+            "--task-type", "regression",
+            "--output-folder", str(tmp_path / "mcfm"),
+            "--accelerator", "auto",
         ],
     )
     assert result.exit_code != 0

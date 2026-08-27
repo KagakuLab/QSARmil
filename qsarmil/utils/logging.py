@@ -8,53 +8,34 @@ from types import TracebackType
 from typing import Any
 
 from rdkit import Chem, RDLogger
-from rdkit.Chem import Mol
 
 RDLogger.DisableLog("rdApp.*")
 
 
 class FailedMolecule:
-    """Represents a molecule for which SMILES parsing or initialization failed."""
+    """A single sentinel for anything that failed anywhere in the pipeline (parsing, conformers, descriptors)."""
 
-    def __init__(self, smiles: str) -> None:
-        """Store the SMILES string that failed to parse."""
-        super().__init__()
-        self.smiles = smiles
-
-    def __str__(self) -> str:
-        """Return a human-readable error message."""
-        return f"{self.smiles} -> SMILES parsing failed"
-
-
-class FailedConformer:
-    """Represents a molecule for which conformer generation failed."""
-
-    def __init__(self, mol: Mol | None) -> None:
-        """Store the molecule that failed conformer generation, or ``None`` if the input was already invalid."""
+    def __init__(self, mol: Any, message: str = "failed") -> None:
+        """Store the failed item - a SMILES string, a Mol, or a bag of Mols - plus why it failed."""
         super().__init__()
         self.mol = mol
+        self.message = message
 
     def __str__(self) -> str:
-        """Return a human-readable error message."""
-        smi = Chem.MolToSmiles(self.mol)
-        return f"{smi} -> conformer generation failed"
-
-
-class FailedDescriptor:
-    """Represents a molecule or bag of conformers for which descriptor calculation failed."""
-
-    def __init__(self, mol: Any) -> None:
-        """Store the molecule or bag that failed descriptor calculation."""
-        super().__init__()
-        self.mol = mol
-
-    def __str__(self) -> str:
-        """Return a human-readable error message, using the first conformer's SMILES if given a whole bag."""
+        """Return a human-readable "<SMILES> -> <reason>" message."""
         mol = self.mol
         if isinstance(mol, list):
             mol = mol[0] if mol else None
-        smi = Chem.MolToSmiles(mol) if mol is not None else "?"
-        return f"{smi} -> descriptor calculation failed"
+        if isinstance(mol, str):
+            smi = mol
+        elif mol is not None:
+            try:
+                smi = Chem.MolToSmiles(mol)
+            except Exception:
+                smi = "?"
+        else:
+            smi = "?"
+        return f"{smi} -> {self.message}"
 
 
 class OutputSuppressor:

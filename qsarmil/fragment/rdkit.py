@@ -1,29 +1,25 @@
 from __future__ import annotations
 
-from typing import Union
-
 from rdkit import Chem, RDLogger
 from rdkit.Chem import BRICS, Mol
 
-from qsarmil.utils.logging import FailedConformer, FailedMolecule
+from qsarmil.utils.logging import FailedMolecule
 
 RDLogger.DisableLog("rdApp.*")
-
-MolOrFailed = Union[Mol, FailedMolecule, FailedConformer]
 
 
 class RDKitFragmentGenerator:
     """Generate molecular fragments using RDKit BRICS decomposition."""
 
     def __init__(self, verbose: bool = True) -> None:
-        """Initialize the RDKit fragment generator."""
+        """Store the verbosity setting."""
         super().__init__()
         self.verbose = verbose
 
-    def _transform(self, mol: MolOrFailed) -> list[Mol] | FailedMolecule | FailedConformer:
-        """Generate fragments for a single molecule using BRICS decomposition."""
+    def _transform(self, mol: Mol | FailedMolecule) -> list[Mol] | FailedMolecule:
+        """Generate fragments for one molecule using BRICS decomposition; pass failed sentinels through."""
 
-        if isinstance(mol, (FailedMolecule, FailedConformer)):
+        if isinstance(mol, FailedMolecule):
             print("Failed molecule")
             return mol
         try:
@@ -36,7 +32,7 @@ class RDKitFragmentGenerator:
 
         return frags
 
-    def run(self, list_of_mols: list[MolOrFailed]) -> list[list[Mol] | FailedMolecule | FailedConformer]:
+    def run(self, list_of_mols: list[Mol | FailedMolecule]) -> list[list[Mol] | FailedMolecule]:
         """Generate fragments for a list of molecules."""
 
         total = len(list_of_mols)

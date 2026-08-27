@@ -11,7 +11,13 @@ from qsarmil.modelling.meta import MultiConformerClassifier, MultiConformerRegre
 TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiConformerClassifier}
 
 
-@click.command(name="train_predict")
+@click.group()
+@click.version_option(package_name="qsarmil")
+def cli() -> None:
+    """QSARmil: train and apply multi-conformer multi-instance learning models on SMILES data."""
+
+
+@cli.command(name="train_predict")
 @click.option(
     "--train-path",
     required=True,
@@ -32,72 +38,33 @@ TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiCo
 )
 @click.option(
     "--output-folder",
-    required=True,
+    default=None,
     type=click.Path(file_okay=False, path_type=Path),
-    help="Directory for the model's intermediate files (train.csv/val.csv/test.csv).",
+    help="Directory for the model's files (train.csv/val.csv/test.csv). Defaults to a timestamped folder.",
+)
+@click.option("--num-conf", default=10, show_default=True, help="Number of conformers to generate per molecule.")
+@click.option("--hopt", type=bool, default=False, show_default=True, help="Hyperparameter optimization for each estimator.")
+@click.option(
+    "--num-cpu", default=os.cpu_count() or 1, show_default=True, help="Number of CPU threads for conformer generation."
 )
 @click.option(
-    "--output-file",
-    required=True,
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the predictions CSV.",
+    "--accelerator", type=click.Choice(["cpu", "gpu"]), default="cpu", show_default=True, help="Training device."
 )
-@click.option(
-    "--num-conf",
-    default=10,
-    show_default=True,
-    help="Number of conformers to generate per molecule."
-)
-@click.option(
-    "--hopt",
-    type=bool,
-    default=False,
-    show_default=True,
-    help="Hyperparameter optimization for each estimator."
-)
-@click.option(
-    "--num-cpu",default=os.cpu_count() or 1,
-    show_default=True,
-    help="Number of CPU threads for conformer generation."
-)
-@click.option(
-    "--accelerator",
-    type=click.Choice(["cpu", "gpu"]),
-    default="cpu",
-    show_default=True,
-    help="Training device.",
-)
-@click.option(
-    "--seed",
-    default=42,
-    show_default=True,
-    help="Random seed."
-)
-@click.option(
-    "--verbose",
-    is_flag=True,
-    default=False,
-    help="Print progress output."
-)
-
+@click.option("--random-seed", default=42, show_default=True, help="Random seed.")
+@click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
 def train_predict_command(
     train_path: Path,
     test_path: Path,
     task_type: str,
-    output_folder: Path,
-    output_file: Path,
+    output_folder: Path | None,
     num_conf: int,
     hopt: bool,
     num_cpu: int,
     accelerator: str,
-    seed: int,
+    random_seed: int,
     verbose: bool,
 ) -> None:
-    """Train a MultiConformerRegressor/Classifier and predict on new SMILES, in one run.
-
-    Training and prediction happen in the same process - there is no model persistence between
-    separate invocations, so both steps are combined into a single command.
-    """
+    """Train a MultiConformerRegressor/Classifier and predict on new SMILES, in one run."""
 
     train_df = pd.read_csv(train_path)
     if train_df.shape[1] < 2:
@@ -114,16 +81,15 @@ def train_predict_command(
         num_conf=num_conf,
         hopt=hopt,
         num_cpu=num_cpu,
-        output_folder=str(output_folder),
+        output_folder=str(output_folder) if output_folder is not None else None,
         verbose=verbose,
-        seed=seed,
+        random_seed=random_seed,
         accelerator=accelerator,
     )
-    preds = model.train_predict(smiles_train, y_train, test_df.iloc[:, 0].tolist())
+    model.train_predict(smiles_train, y_train, test_df.iloc[:, 0].tolist())
 
-    out_df = test_df.copy()
-    out_df["prediction"] = preds
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(output_file, index=False)
+    click.echo(f"\nPredictions saved to {os.path.join(model.output_folder, 'test.csv')}")
 
-    click.echo(f"\nPredictions saved to {output_file}")
+
+if __name__ == "__main__":
+    cli()

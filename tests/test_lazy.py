@@ -9,83 +9,57 @@ from qsarmil.descriptor.rdkit import RDKitGEOM
 from qsarmil.descriptor.wrapper import DescriptorWrapper
 from qsarmil.modelling.lazy import (
     LazyMIL,
+    baseline_prediction,
     calculate_descriptors,
     generate_conformers,
-    parse_smiles,
     scale_descriptors,
-    baseline_prediction,
     train_estimator,
 )
 from qsarmil.utils.logging import FailedMolecule
 
 # ---------------------------------------------------------------------------
-# parse_smiles
-# ---------------------------------------------------------------------------
-
-def test_parse_smiles_wraps_unparseable_smiles():
-    results = parse_smiles(["CCO", "not_a_valid_smiles!!!"])
-    assert len(results) == 2
-    assert results[0] is not None and not isinstance(results[0], FailedMolecule)
-    assert isinstance(results[1], FailedMolecule)
-
-
-def test_parse_smiles_verbose_reports_summary(capsys):
-    parse_smiles(["CCO", "not_a_valid_smiles!!!", "c1ccccc1"], verbose=True)
-    captured = capsys.readouterr()
-    assert "Parsed 2 of 3 SMILES successfully." in captured.out
-
-
-def test_parse_smiles_quiet_prints_nothing(capsys):
-    parse_smiles(["CCO", "not_a_valid_smiles!!!"], verbose=False)
-    assert capsys.readouterr().out == ""
-
-
-# ---------------------------------------------------------------------------
-# generate_conformers
+# generate_conformers (parses SMILES and embeds conformers, merged into one step)
 # ---------------------------------------------------------------------------
 
 def test_generate_conformers_returns_ensembles():
-    mols = parse_smiles(["CCO", "c1ccccc1"])
-    ensembles = generate_conformers(mols, num_conf=2, num_cpu=1)
+    ensembles = generate_conformers(["CCO", "c1ccccc1"], num_conf=2, num_cpu=1)
     assert len(ensembles) == 2
     for ens in ensembles:
         assert len(ens) == 2
 
 
-def test_generate_conformers_seed_affects_output():
-    mols = parse_smiles(["CC(C)Cc1ccc(cc1)C(C)C(=O)O"])
-    a = generate_conformers(mols, num_conf=2, num_cpu=1, seed=42)
-    b = generate_conformers(mols, num_conf=2, num_cpu=1, seed=123)
+def test_generate_conformers_wraps_unparseable_smiles():
+    results = generate_conformers(["CCO", "not_a_valid_smiles!!!"], num_conf=2, num_cpu=1)
+    assert len(results) == 2
+    assert isinstance(results[0], list)
+    assert isinstance(results[1], FailedMolecule)
+    assert results[1].message == "SMILES parsing failed"
+
+
+def test_generate_conformers_random_seed_affects_output():
+    smi = ["CC(C)Cc1ccc(cc1)C(C)C(=O)O"]
+    a = generate_conformers(smi, num_conf=2, num_cpu=1, random_seed=42)
+    b = generate_conformers(smi, num_conf=2, num_cpu=1, random_seed=123)
     coords_a = a[0][0].GetConformer(0).GetPositions()
     coords_b = b[0][0].GetConformer(0).GetPositions()
     assert (coords_a != coords_b).any()
 
 
-def test_generate_conformers_passes_through_failed_molecule():
-    mols = parse_smiles(["CCO", "not_a_valid_smiles!!!"])
-    confs = generate_conformers(mols, num_conf=2, num_cpu=1)
-    assert isinstance(confs[0], list)
-    assert isinstance(confs[1], FailedMolecule)
-
-
 def test_generate_conformers_verbose_reports_summary(capsys):
-    mols = parse_smiles(["CCO", "not_a_valid_smiles!!!"])
-    generate_conformers(mols, num_conf=2, num_cpu=1, verbose=True)
+    generate_conformers(["CCO", "not_a_valid_smiles!!!"], num_conf=2, num_cpu=1, verbose=True)
     captured = capsys.readouterr()
     assert "Generated conformers for 1 of 2 molecules." in captured.out
 
 
 def test_generate_conformers_quiet_prints_nothing(capsys):
-    mols = parse_smiles(["CCO"])
-    generate_conformers(mols, num_conf=2, num_cpu=1, verbose=False)
+    generate_conformers(["CCO"], num_conf=2, num_cpu=1, verbose=False)
     assert capsys.readouterr().out == ""
 
 
 def test_generate_conformers_suppresses_low_level_ticker(capsys):
     """The RDKit-level per-molecule ticker stays off regardless of `verbose`, since LazyMIL owns
     its own step-level progress instead."""
-    mols = parse_smiles(["CCO"])
-    generate_conformers(mols, num_conf=2, num_cpu=1, verbose=True)
+    generate_conformers(["CCO"], num_conf=2, num_cpu=1, verbose=True)
     assert "Generating conformers:" not in capsys.readouterr().out
 
 
@@ -94,8 +68,7 @@ def test_generate_conformers_suppresses_low_level_ticker(capsys):
 # ---------------------------------------------------------------------------
 
 def test_calculate_descriptors_real():
-    mols = parse_smiles(["CCO", "c1ccccc1"])
-    conf_list = generate_conformers(mols, num_conf=2, num_cpu=1)
+    conf_list = generate_conformers(["CCO", "c1ccccc1"], num_conf=2, num_cpu=1)
     calc = DescriptorWrapper(RDKitGEOM(), verbose=False)
     bags = calculate_descriptors(conf_list, calc)
     assert len(bags) == 2
@@ -131,14 +104,14 @@ def test_scale_descriptors_handles_empty_test():
 
 
 # ---------------------------------------------------------------------------
-# target_fallback
+# baseline_prediction
 # ---------------------------------------------------------------------------
 
-def test_target_fallback_continuous_is_mean():
+def test_baseline_prediction_continuous_is_mean():
     assert baseline_prediction([1.0, 2.0, 3.0], "continuous") == pytest.approx(2.0)
 
 
-def test_target_fallback_binary_is_most_common_class():
+def test_baseline_prediction_binary_is_most_common_class():
     assert baseline_prediction([0, 1, 1, 1, 0], "binary") == 1
 
 
@@ -159,7 +132,7 @@ def test_train_estimator_with_hopt():
     x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
     pred_train, pred_val, pred_test = train_estimator(
-        x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, seed=7
+        x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, random_seed=7
     )
     assert estimator.hopt_called is True
     assert len(pred_train) == 2
@@ -207,7 +180,7 @@ def test_train_estimator_with_sklearn_ridge_accepts_pooled_2d():
 def test_train_estimator_hopt_path():
     x_train, x_val, x_test, y_train, y_val = _tiny_bags()
     estimator = MockEstimator(supports_hopt=True)
-    train_estimator(x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, seed=11)
+    train_estimator(x_train, x_val, x_test, y_train, y_val, estimator, hopt=True, random_seed=11)
     assert estimator.hopt_called is True
 
 
@@ -244,13 +217,22 @@ def test_default_regressor_and_classifier_factories_resolve():
     from qsarmil.modelling.lazy import CLASSIFIERS, REGRESSORS
 
     for factory in REGRESSORS.values():
-        est = factory()
+        est = factory(accelerator="cpu")
         assert hasattr(est, "fit")
         assert hasattr(est, "predict")
     for factory in CLASSIFIERS.values():
-        est = factory()
+        est = factory(accelerator="cpu")
         assert hasattr(est, "fit")
         assert hasattr(est, "predict")
+
+
+def test_default_regressor_factories_use_own_default_when_accelerator_omitted():
+    """**kwargs forwarding means calling with no accelerator falls back to milearn's own "cpu" default,
+    rather than raising - LazyMIL.run() always supplies one explicitly regardless."""
+    from qsarmil.modelling.lazy import REGRESSORS
+
+    est = REGRESSORS["MeanBagNetworkRegressor"]()
+    assert hasattr(est, "fit")
 
 
 def test_default_regressor_factories_are_independent_instances():
@@ -259,7 +241,7 @@ def test_default_regressor_factories_are_independent_instances():
     from qsarmil.modelling.lazy import REGRESSORS
 
     factory = REGRESSORS["MeanBagNetworkRegressor"]
-    assert factory() is not factory()
+    assert factory(accelerator="cpu") is not factory(accelerator="cpu")
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +261,11 @@ def test_lazymil_accelerator_defaults_to_cpu():
 def test_lazymil_accelerator_explicit_override(tmp_path):
     lazy = LazyMIL(task="continuous", output_folder=str(tmp_path / "out"), accelerator="gpu")
     assert lazy.accelerator == "gpu"
+
+
+def test_lazymil_random_seed_defaults_to_42():
+    lazy = LazyMIL(task="continuous")
+    assert lazy.random_seed == 42
 
 
 def test_lazymil_init_sets_estimators_from_task():
@@ -336,11 +323,10 @@ def test_lazymil_run_continuous_verbose(monkeypatch, tmp_path, capsys):
     assert "RDKitGEOM|Mock" in result_test.columns
 
     captured = capsys.readouterr()
-    assert "Step-1. SMILES parsing" in captured.out
-    assert "Step-2. Conformer generation" in captured.out
-    assert "Step-3. Descriptor calculation" in captured.out
-    assert "Step-4. Model training" in captured.out
-    assert "Parsed 5 of 6 SMILES successfully." in captured.out
+    assert "Step-1. Conformer generation" in captured.out
+    assert "Step-2. Descriptor calculation" in captured.out
+    assert "Step-3. Model training" in captured.out
+    assert "Generated conformers for 5 of 6 molecules." in captured.out
     assert "RDKitGEOM: done" in captured.out
     assert "[1/1] RDKitGEOM|Mock" in captured.out
     assert (tmp_path / "out" / "train.csv").exists()
@@ -427,7 +413,7 @@ def test_lazymil_run_descriptors_calculated_once_across_splits(monkeypatch, tmp_
     assert calls == [len(smi_train) + len(smi_val) + len(smi_test)]
 
 
-def test_lazymil_run_test_predictions_use_fallback_for_failed_molecules(monkeypatch, tmp_path, capsys):
+def test_lazymil_run_test_predictions_use_baseline_for_failed_molecules(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
 
     smi_train = ["CCO", "c1ccccc1", "CCN", "CCC"]
@@ -443,8 +429,8 @@ def test_lazymil_run_test_predictions_use_fallback_for_failed_molecules(monkeypa
     _, _, result_test = lazy.run(smi_train, y_train, smi_val, y_val, smi_test)
 
     assert len(result_test) == 2  # test rows are never dropped, even on failure
-    fallback = baseline_prediction(y_train, "continuous")
-    assert result_test["RDKitGEOM|Mock"].iloc[1] == pytest.approx(fallback)
+    baseline = baseline_prediction(y_train, "continuous")
+    assert result_test["RDKitGEOM|Mock"].iloc[1] == pytest.approx(baseline)
 
     captured = capsys.readouterr()
     assert "1 test molecule(s) could not be processed" in captured.out

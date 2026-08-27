@@ -1,4 +1,5 @@
 import os
+import re
 
 import pandas as pd
 from conftest import MockEstimator
@@ -57,17 +58,17 @@ def test_regressor_and_classifier_share_base_class():
     assert issubclass(MultiConformerClassifier, MultiConformerEstimator)
 
 
-def test_regressor_forces_continuous_task():
+def test_regressor_forces_continuous_task(tmp_path):
     """MultiConformerRegressor's whole reason to exist: its LazyMIL is built with task="continuous"
     directly, rather than inferring it from the target values (which could be ambiguous for a
     2-distinct-value numeric target)."""
-    model = MultiConformerRegressor(output_folder=None)
+    model = MultiConformerRegressor(output_folder=str(tmp_path / "out"))
     assert model._lazy_model.task == "continuous"
     assert model._lazy_model.ESTIMATORS is lazy_mod.REGRESSORS
 
 
-def test_classifier_forces_binary_task():
-    model = MultiConformerClassifier(output_folder=None)
+def test_classifier_forces_binary_task(tmp_path):
+    model = MultiConformerClassifier(output_folder=str(tmp_path / "out"))
     assert model._lazy_model.task == "binary"
     assert model._lazy_model.ESTIMATORS is lazy_mod.CLASSIFIERS
 
@@ -75,8 +76,13 @@ def test_classifier_forces_binary_task():
 def test_init_default_creates_temp_dir():
     model = MultiConformerRegressor()
     assert os.path.isdir(model.output_folder)
-    assert model._lazy_model.seed == 42
+    assert model._lazy_model.random_seed == 42
     assert model._lazy_model.accelerator == "cpu"
+
+
+def test_init_default_output_folder_is_timestamped():
+    model = MultiConformerRegressor()
+    assert re.fullmatch(r"qsarmil_\d{2}_\d{2}_\d{4}_\d{2}_\d{2}_\d{2}", model.output_folder)
 
 
 def test_init_forwards_accelerator_to_lazy_model(tmp_path):
@@ -92,7 +98,7 @@ def test_train_predict_end_to_end_regression(monkeypatch, tmp_path, capsys):
     smiles_test = ["CCF"]
 
     model = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True, seed=42
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True, random_seed=42
     )
     preds = model.train_predict(smiles_train, y_train, smiles_test)
 
@@ -101,12 +107,15 @@ def test_train_predict_end_to_end_regression(monkeypatch, tmp_path, capsys):
     assert len(model.best_consensus) > 0
 
     captured = capsys.readouterr()
-    assert "Step-5. Genetic model consensus search" in captured.out
+    assert "Step-4. Genetic model consensus search" in captured.out
     assert "Best genetic consensus" in captured.out
 
     assert (tmp_path / "out" / "train.csv").exists()
     assert (tmp_path / "out" / "val.csv").exists()
-    assert (tmp_path / "out" / "test.csv").exists()
+
+    test_df = pd.read_csv(tmp_path / "out" / "test.csv")
+    assert "prediction" in test_df.columns
+    assert list(test_df["prediction"]) == preds
 
 
 def test_train_predict_end_to_end_classification_quiet(monkeypatch, tmp_path, capsys):
@@ -117,7 +126,7 @@ def test_train_predict_end_to_end_classification_quiet(monkeypatch, tmp_path, ca
     smiles_test = ["CCF"]
 
     model = MultiConformerClassifier(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, seed=99
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=False, random_seed=99
     )
     preds = model.train_predict(smiles_train, y_train, smiles_test)
 
@@ -126,18 +135,18 @@ def test_train_predict_end_to_end_classification_quiet(monkeypatch, tmp_path, ca
     assert capsys.readouterr().out == ""
 
 
-def test_seeds_produce_different_train_val_splits(monkeypatch, tmp_path):
-    """self.seed reaches train_test_split's random_state."""
+def test_random_seed_produces_different_train_val_splits(monkeypatch, tmp_path):
+    """self.random_seed reaches train_test_split's random_state."""
     _patch_fast_pipeline(monkeypatch)
     smiles_train = ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
     y_train = [1.1, 2.2, 3.3, 4.4, 5.5]
     smiles_test = ["CCF"]
 
     model_a = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out_a"), verbose=False, seed=1
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out_a"), verbose=False, random_seed=1
     )
     model_b = MultiConformerRegressor(
-        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out_b"), verbose=False, seed=2
+        num_conf=2, hopt=False, num_cpu=1, output_folder=str(tmp_path / "out_b"), verbose=False, random_seed=2
     )
     model_a.train_predict(smiles_train, y_train, smiles_test)
     model_b.train_predict(smiles_train, y_train, smiles_test)

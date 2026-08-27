@@ -2,7 +2,7 @@ from rdkit import Chem
 from rdkit.Chem import BRICS
 
 from qsarmil.fragment.rdkit import RDKitFragmentGenerator
-from qsarmil.utils.logging import FailedConformer, FailedMolecule
+from qsarmil.utils.logging import FailedMolecule
 
 
 def test_generate_fragments_success():
@@ -13,12 +13,10 @@ def test_generate_fragments_success():
     assert len(result) >= 1
 
 
-def test_generate_fragments_passes_through_failed_sentinels(capsys):
+def test_generate_fragments_passes_through_failed_sentinel(capsys):
     gen = RDKitFragmentGenerator(verbose=False)
-    failed = FailedMolecule("garbage")
+    failed = FailedMolecule("garbage", message="SMILES parsing failed")
     assert gen._transform(failed) is failed
-    failed_conf = FailedConformer(None)
-    assert gen._transform(failed_conf) is failed_conf
     captured = capsys.readouterr()
     assert "Failed molecule" in captured.out
 

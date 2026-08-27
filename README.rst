@@ -55,12 +55,11 @@ predictions for new molecules back.
      ]
      y_train = [5.2, 5.9, 6.1, 7.0, 5.6]
 
-     # train model
-     model = MultiConformerRegressor(num_conf=10, hopt=True, output_folder="mcf", verbose=True)
-     model.train(smiles_train, y_train)
+     smiles_test = ["CC(C(=O)O)Oc1cccc(c1)-c1ccccc1", "CC(C(=O)O)c1ccc(cc1)-c1ccc(F)cc1"]
 
-     # predict for new molecules
-     y_pred = model.predict(["CC(C(=O)O)Oc1cccc(c1)-c1ccccc1", "CC(C(=O)O)c1ccc(cc1)-c1ccc(F)cc1"])
+     # train and predict in one call - there's no separate save/load step
+     model = MultiConformerRegressor(num_conf=10, hopt=True, verbose=True)
+     y_pred = model.train_predict(smiles_train, y_train, smiles_test)
 
 Use ``MultiConformerRegressor`` for continuous properties and ``MultiConformerClassifier`` for binary
 classification. See the full walkthrough in
@@ -84,4 +83,4 @@ Tutorials
 Documentation
 --------------------------
 
-Full documentation is available (link coming soon).
+Full documentation is available at `kagakulab.github.io/qsarmil <https://kagakulab.github.io/qsarmil/>`_.

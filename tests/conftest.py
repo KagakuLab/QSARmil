@@ -11,12 +11,12 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 
-def embed_mol(smiles: str, num_conf: int = 5, seed: int = 42) -> Chem.Mol:
+def embed_mol(smiles: str, num_conf: int = 5, random_seed: int = 42) -> Chem.Mol:
     """Build a real, embedded, force-field-optimized RDKit molecule."""
     mol = Chem.MolFromSmiles(smiles)
     mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
-    params.randomSeed = seed
+    params.randomSeed = random_seed
     conf_ids = AllChem.EmbedMultipleConfs(mol, numConfs=num_conf, params=params)
     for cid in conf_ids:
         AllChem.UFFOptimizeMolecule(mol, confId=cid)
