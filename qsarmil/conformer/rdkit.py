@@ -26,13 +26,32 @@ def split_into_conformers(mol: Mol) -> list[Mol]:
         list[Mol]: One single-conformer copy of ``mol`` per embedded conformer.
     """
 
-    bag = []
+    conf_list = []
     for conf in mol.GetConformers():
         conf_mol = Chem.Mol(mol)
         conf_mol.RemoveAllConformers()
         conf_mol.AddConformer(conf, assignId=True)
-        bag.append(conf_mol)
-    return bag
+        conf_list.append(conf_mol)
+    return conf_list
+
+
+def filter_by_energy(mol: Mol, e_thresh: float = 1) -> Mol:
+    """Filter conformers of a molecule based on relative energy."""
+
+    conf_with_energy = []
+    for conf in mol.GetConformers():
+        ff = AllChem.UFFGetMoleculeForceField(mol, confId=conf.GetId())
+        if ff is None:
+            continue
+        conf_with_energy.append((conf.GetId(), ff.CalcEnergy()))
+    conf_with_energy = sorted(conf_with_energy, key=lambda x: x[1])
+
+    min_energy = conf_with_energy[0][1]
+    for conf_id, conf_energy in conf_with_energy[1:]:
+        if conf_energy - min_energy >= e_thresh:
+            mol.RemoveConformer(conf_id)
+
+    return mol
 
 
 class RDKitConformerGenerator:
@@ -63,37 +82,13 @@ class RDKitConformerGenerator:
         self.verbose = verbose
         self.seed = seed
 
-    def _prepare_molecule(self, mol: Mol | None) -> Mol:
-        """Prepare a molecule by adding explicit hydrogens."""
-        mol = Chem.AddHs(mol)
-        return mol
-
     def _embed_conformers(self, mol: Mol | None) -> Mol:
         """Generate multiple 3D conformers for a molecule."""
-        mol = self._prepare_molecule(mol)
+        mol = Chem.AddHs(mol)
         params = AllChem.ETKDGv3()
         params.randomSeed = self.seed
         AllChem.EmbedMultipleConfs(mol, numConfs=self.num_conf, params=params)
         return mol
-
-    def _generate_conformers(self, mol: MolOrFailed) -> MolOrFailed:
-        """Generate and optionally filter conformers for a molecule."""
-
-        if isinstance(mol, (FailedMolecule, FailedConformer)):
-            return mol
-        try:
-            embedded = self._embed_conformers(mol)
-            if not embedded.GetNumConformers():
-                print(f"Conformer generation failed for {Chem.MolToSmiles(embedded)}")
-                return FailedConformer(embedded)
-            embedded = self._optimize_conformers(embedded)
-        except Exception:
-            return FailedConformer(mol)
-
-        if self.e_thresh is not None:
-            embedded = filter_by_energy(embedded, self.e_thresh)
-
-        return embedded
 
     def _optimize_conformers(self, mol: Mol) -> Mol:
         """Optimize all conformers of a molecule using UFF force field."""
@@ -101,6 +96,25 @@ class RDKitConformerGenerator:
         for conf in mol.GetConformers():
             AllChem.UFFOptimizeMolecule(mol, confId=conf.GetId())
         return mol
+
+    def _generate_conformers(self, mol: MolOrFailed) -> MolOrFailed:
+        """Generate and optionally filter conformers for a molecule."""
+
+        # 1. Embed conformers
+        embedded = self._embed_conformers(mol)
+        if not embedded.GetNumConformers():
+            print(f"Conformer generation failed for {Chem.MolToSmiles(embedded)}")
+            return FailedConformer(embedded)
+
+        # 2. Optimize conformers with UFF
+        optimized = self._optimize_conformers(embedded)
+
+        # 3. Filter conformers
+        if self.e_thresh is not None:
+            filtered = filter_by_energy(optimized, self.e_thresh)
+            return filtered
+        else:
+            return optimized
 
     def run(self, list_of_mols: list[MolOrFailed]) -> list[list[Mol] | FailedMolecule | FailedConformer]:
         """Generate conformers for a list of molecules in parallel; failures pass through instead of raising."""
@@ -140,20 +154,4 @@ class RDKitConformerGenerator:
         return results
 
 
-def filter_by_energy(mol: Mol, e_thresh: float = 1) -> Mol:
-    """Filter conformers of a molecule based on relative energy."""
 
-    conf_energy_list = []
-    for conf in mol.GetConformers():
-        ff = AllChem.UFFGetMoleculeForceField(mol, confId=conf.GetId())
-        if ff is None:
-            continue
-        conf_energy_list.append((conf.GetId(), ff.CalcEnergy()))
-    conf_energy_list = sorted(conf_energy_list, key=lambda x: x[1])
-
-    min_energy = conf_energy_list[0][1]
-    for conf_id, conf_energy in conf_energy_list[1:]:
-        if conf_energy - min_energy >= e_thresh:
-            mol.RemoveConformer(conf_id)
-
-    return mol

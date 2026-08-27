@@ -20,7 +20,7 @@ class RDKitFragmentGenerator:
         super().__init__()
         self.verbose = verbose
 
-    def _generate_fragments(self, mol: MolOrFailed) -> list[Mol] | FailedMolecule | FailedConformer:
+    def _transform(self, mol: MolOrFailed) -> list[Mol] | FailedMolecule | FailedConformer:
         """Generate fragments for a single molecule using BRICS decomposition."""
 
         if isinstance(mol, (FailedMolecule, FailedConformer)):
@@ -43,11 +43,8 @@ class RDKitFragmentGenerator:
 
         results = []
         for i, mol in enumerate(list_of_mols, 1):
-            results.append(self._generate_fragments(mol))
+            results.append(self._transform(mol))
             if self.verbose:
                 print(f"Generating fragments: {i}/{total}", end="\r", flush=True)
-
-        if self.verbose:
-            print(f"Generating fragments: {total}/{total}")
 
         return results

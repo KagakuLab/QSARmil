@@ -8,7 +8,7 @@ from qsarmil.utils.logging import FailedConformer, FailedMolecule
 def test_generate_fragments_success():
     gen = RDKitFragmentGenerator(verbose=False)
     mol = Chem.MolFromSmiles("CC(=O)Nc1ccc(cc1)OCC")  # phenacetin, BRICS-decomposable
-    result = gen._generate_fragments(mol)
+    result = gen._transform(mol)
     assert isinstance(result, list)
     assert len(result) >= 1
 
@@ -16,9 +16,9 @@ def test_generate_fragments_success():
 def test_generate_fragments_passes_through_failed_sentinels(capsys):
     gen = RDKitFragmentGenerator(verbose=False)
     failed = FailedMolecule("garbage")
-    assert gen._generate_fragments(failed) is failed
+    assert gen._transform(failed) is failed
     failed_conf = FailedConformer(None)
-    assert gen._generate_fragments(failed_conf) is failed_conf
+    assert gen._transform(failed_conf) is failed_conf
     captured = capsys.readouterr()
     assert "Failed molecule" in captured.out
 
@@ -31,7 +31,7 @@ def test_generate_fragments_falls_back_on_exception(monkeypatch, capsys):
         raise ValueError("boom")
 
     monkeypatch.setattr(BRICS, "BRICSDecompose", raise_decompose)
-    result = gen._generate_fragments(mol)
+    result = gen._transform(mol)
     assert isinstance(result, list)
     assert list(result) == [mol]
     captured = capsys.readouterr()

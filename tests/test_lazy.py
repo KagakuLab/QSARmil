@@ -13,7 +13,7 @@ from qsarmil.modelling.lazy import (
     generate_conformers,
     parse_smiles,
     scale_descriptors,
-    target_fallback,
+    baseline_prediction,
     train_estimator,
 )
 from qsarmil.utils.logging import FailedMolecule
@@ -135,11 +135,11 @@ def test_scale_descriptors_handles_empty_test():
 # ---------------------------------------------------------------------------
 
 def test_target_fallback_continuous_is_mean():
-    assert target_fallback([1.0, 2.0, 3.0], "continuous") == pytest.approx(2.0)
+    assert baseline_prediction([1.0, 2.0, 3.0], "continuous") == pytest.approx(2.0)
 
 
 def test_target_fallback_binary_is_most_common_class():
-    assert target_fallback([0, 1, 1, 1, 0], "binary") == 1
+    assert baseline_prediction([0, 1, 1, 1, 0], "binary") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +443,7 @@ def test_lazymil_run_test_predictions_use_fallback_for_failed_molecules(monkeypa
     _, _, result_test = lazy.run(smi_train, y_train, smi_val, y_val, smi_test)
 
     assert len(result_test) == 2  # test rows are never dropped, even on failure
-    fallback = target_fallback(y_train, "continuous")
+    fallback = baseline_prediction(y_train, "continuous")
     assert result_test["RDKitGEOM|Mock"].iloc[1] == pytest.approx(fallback)
 
     captured = capsys.readouterr()

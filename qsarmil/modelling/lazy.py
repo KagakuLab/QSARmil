@@ -46,9 +46,7 @@ RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 # ==========================================================
 # Configuration
 # ==========================================================
-# Every entry is a zero-argument factory rather than a ready-made instance, so that each call to
-# LazyMIL.run() gets fresh, independent DescriptorWrapper objects instead of sharing (and mutating)
-# module-level state across runs.
+
 DESCRIPTORS: dict[str, Callable[[], DescriptorWrapper]] = {
     "RDKitGEOM": lambda: DescriptorWrapper(RDKitGEOM()),
     "RDKitAUTOCORR": lambda: DescriptorWrapper(RDKitAUTOCORR()),
@@ -61,9 +59,6 @@ DESCRIPTORS: dict[str, Callable[[], DescriptorWrapper]] = {
     "MolFeatPmapper": lambda: DescriptorWrapper(Pharmacophore3D(factory="pmapper")),
 }
 
-# Same reasoning as DESCRIPTORS above: factories, not instances, so every run() call and every
-# descriptor gets its own fresh estimator rather than 9 descriptors overwriting one shared model.
-# accelerator is threaded through explicitly (default "cpu") so LazyMIL can pass its own setting in.
 REGRESSORS: dict[str, Callable[..., Any]] = {
     # mil wrappers
     "MeanInstanceWrapperMLPNetworkRegressor": lambda accelerator="cpu": InstanceWrapperMLPNetworkRegressor(
@@ -193,7 +188,8 @@ def generate_conformers(
 def calculate_descriptors(conf_list: list[list[Any]], calculator: DescriptorWrapper) -> list[np.ndarray]:
     """Compute descriptor bags for a list of per-molecule conformer bags."""
     calculator.verbose = False  # the low-level per-conformer ticker is redundant with LazyMIL's own step progress
-    return calculator.run(conf_list)
+    desc_list = calculator.run(conf_list)
+    return desc_list
 
 
 def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
@@ -211,7 +207,7 @@ def scale_descriptors(x_train: list[np.ndarray], x_test: list[np.ndarray]) -> tu
     return scaler.transform(x_train), scaler.transform(x_test)
 
 
-def target_fallback(y: Iterable[Any], task_type: str) -> Any:
+def baseline_prediction(y: Iterable[Any], task_type: str) -> Any:
     """Fallback prediction for molecules that can't be processed at inference time.
 
     Args:
@@ -238,7 +234,7 @@ def train_estimator(
     x_test: list[np.ndarray],
     y_train: Iterable[Any],
     y_val: Iterable[Any],
-    estimator_instance: Any,
+    estimator: Any,
     hopt: bool = True,
     seed: int = 42,
     accelerator: str = "cpu",
@@ -254,7 +250,7 @@ def train_estimator(
         x_test (list[np.ndarray]): Descriptor bags to predict on; may be empty.
         y_train (array-like): Training targets.
         y_val (array-like): Validation targets.
-        estimator_instance: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
+        estimator: A MIL estimator implementing ``fit``/``predict``, optionally ``hopt``.
         hopt (bool): Whether to run ``estimator_instance.hopt`` before fitting, if supported.
         seed (int): Random seed passed to the estimator's hyperparameter search.
         accelerator (str): ``"cpu"``/``"gpu"``, forced into the hopt search grid so it can't be
@@ -269,21 +265,21 @@ def train_estimator(
     x_train_scaled, x_val_scaled = scale_descriptors(x_train, x_val)
 
     # 2. Optimize hyperparameters
-    if hopt and hasattr(estimator_instance, "hopt"):
+    if hopt and hasattr(estimator, "hopt"):
         param_grid = {**HYPERPARAMETERS, "random_seed": seed, "accelerator": accelerator}
-        estimator_instance.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
+        estimator.hopt(x_train_scaled, y_train, param_grid=param_grid, verbose=False)
 
     # 3. Train on train split only (not final training yet)
-    estimator_instance.fit(x_train_scaled, y_train)
-    pred_train = list(estimator_instance.predict(x_train_scaled))
-    pred_val = list(estimator_instance.predict(x_val_scaled))
+    estimator.fit(x_train_scaled, y_train)
+    pred_train = list(estimator.predict(x_train_scaled))
+    pred_val = list(estimator.predict(x_val_scaled))
 
     # 4. Retrain on the full train+val set and predict on test with that same fit.
     x_full = x_train + x_val
     y_full = np.hstack((y_train, y_val))
     x_full_scaled, x_test_scaled = scale_descriptors(x_full, x_test)
-    estimator_instance.fit(x_full_scaled, y_full)
-    pred_test = list(estimator_instance.predict(x_test_scaled)) if x_test else []
+    estimator.fit(x_full_scaled, y_full)
+    pred_test = list(estimator.predict(x_test_scaled)) if x_test else []
 
     return pred_train, pred_val, pred_test
 
@@ -397,9 +393,8 @@ class LazyMIL:
         y_val = [y_val[i] for i in ok_val]
         conf_val = [conf_val[i] for i in ok_val]
 
-        # Test: keep every row - the output needs one prediction per input SMILES. Molecules that
-        # failed get the training set fallback instead of a real prediction, below.
-        train_fallback = target_fallback(y_train, self.task)
+        # Keep all test molecules
+        train_baseline = baseline_prediction(y_train, self.task)
         ok_test = [i for i, c in enumerate(conf_test) if isinstance(c, list)]
         smi_test_valid = [smi_test[i] for i in ok_test]
         conf_test_valid = [conf_test[i] for i in ok_test]
@@ -408,7 +403,7 @@ class LazyMIL:
         if n_failed_test and self.verbose:
             print(
                 f"{n_failed_test} test molecule(s) could not be processed and will be predicted "
-                "using the training set fallback value instead."
+                "using the training set bseline value instead."
             )
 
         result_df_train = pd.DataFrame({"SMILES": smi_train, "Y_TRUE": y_train})
@@ -439,8 +434,8 @@ class LazyMIL:
         current_model = 0
 
         for desc_name, (x_train, x_val, x_test) in ready_descriptors.items():
-            for est_name, factory in self.ESTIMATORS.items():
-                estimator = factory(accelerator=self.accelerator)
+            for est_name, est_factory in self.ESTIMATORS.items():
+                estimator = est_factory(accelerator=self.accelerator)
                 model_name = f"{desc_name}|{est_name}"
                 current_model += 1
 
@@ -454,7 +449,7 @@ class LazyMIL:
 
                 result_df_train[model_name] = pred_train
                 result_df_val[model_name] = pred_val
-                result_df_test[model_name] = [preds_by_smi.get(smi, train_fallback) for smi in smi_test]
+                result_df_test[model_name] = [preds_by_smi.get(smi, train_baseline) for smi in smi_test]
 
                 result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
                 result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)

@@ -42,13 +42,23 @@ TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiCo
     type=click.Path(dir_okay=False, path_type=Path),
     help="Where to write the predictions CSV.",
 )
-@click.option("--num-conf", default=10, show_default=True, help="Number of conformers to generate per molecule.")
-@click.option("--hopt", type=bool, default=False, show_default=True, help="Hyperparameter-tune each estimator.")
 @click.option(
-    "--num-cpu",
-    default=os.cpu_count() or 1,
+    "--num-conf",
+    default=10,
     show_default=True,
-    help="Number of CPU threads for conformer generation.",
+    help="Number of conformers to generate per molecule."
+)
+@click.option(
+    "--hopt",
+    type=bool,
+    default=False,
+    show_default=True,
+    help="Hyperparameter optimization for each estimator."
+)
+@click.option(
+    "--num-cpu",default=os.cpu_count() or 1,
+    show_default=True,
+    help="Number of CPU threads for conformer generation."
 )
 @click.option(
     "--accelerator",
@@ -57,8 +67,19 @@ TASK_CLASSES = {"regression": MultiConformerRegressor, "classification": MultiCo
     show_default=True,
     help="Training device.",
 )
-@click.option("--seed", default=42, show_default=True, help="Random seed.")
-@click.option("--verbose", is_flag=True, default=False, help="Print progress output.")
+@click.option(
+    "--seed",
+    default=42,
+    show_default=True,
+    help="Random seed."
+)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Print progress output."
+)
+
 def train_predict_command(
     train_path: Path,
     test_path: Path,
