@@ -74,7 +74,7 @@ class MultiConformerEstimator:
         x_val, true_val = result_df_val.iloc[:, 2:], result_df_val.iloc[:, 1]
 
         if self.verbose:
-            print("Step-4. Genetic model consensus search")
+            print("Step-4. Genetic consensus search")
 
         cons_search = GeneticSearch(cons_size="auto", n_iter=50)
         best_cons = cons_search.run(x_val, true_val)
@@ -93,8 +93,6 @@ class MultiConformerEstimator:
             raise ValueError("Consensus references missing model columns: " + ", ".join(missing_cols))
 
         pred_test = list(self._consensus_search.predict(x_test[self.best_consensus]))
-
-        result_df_test["prediction"] = pred_test
         result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
 
         return pred_test

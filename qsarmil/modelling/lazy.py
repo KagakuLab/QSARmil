@@ -120,7 +120,7 @@ def generate_conformers(
 
     if verbose:
         n_valid = sum(isinstance(c, list) for c in conf_list)
-        print(f"Generated conformers for {n_valid} of {len(conf_list)} molecules.")
+        print(f"Generated conformers for {n_valid} of {len(conf_list)} molecules")
 
     return conf_list
 
@@ -289,7 +289,7 @@ class LazyMIL:
 
         # 3. Train every descriptor/estimator combination and predict on train/val/test.
         if self.verbose:
-            print("Step-3. Model training")
+            print("Step-3. Individual model training")
 
         total_models = len(DESCRIPTORS) * len(self.ESTIMATORS)
         current_model = 0
