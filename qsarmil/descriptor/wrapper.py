@@ -1,94 +1,67 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence, Union
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
+from rdkit.Chem import Mol
 
-from qsarmil.utils.ensemble import ConformerEnsemble, FragmentEnsemble, MixtureEnsemble
-from qsarmil.utils.logging import FailedDescriptor
+from qsarmil.utils.logging import FailedMolecule
 
-Ensemble = Union[ConformerEnsemble, FragmentEnsemble, MixtureEnsemble]
+_EXTREME_VALUE_THRESHOLD = 1e25
 
 
 class DescriptorWrapper:
-    """Wrapper to compute molecular descriptors for multiple conformers in
-    parallel.
-
-    Converts a molecule into a "bag" of descriptor vectors, one per conformer,
-    with optional parallelization and progress tracking.
-
-    Args:
-        transformer (callable): Descriptor function or object that accepts a molecule
-            and optional conformer ID, returning a descriptor vector.
-        verbose (bool): Whether to display a progress bar.
-    """
+    """Compute molecular descriptors for a bag of conformers, for both RDKit-based and external transformers."""
 
     def __init__(self, transformer: Callable[..., np.ndarray], verbose: bool = True) -> None:
-        """Initialize the descriptor wrapper.
-
-        Args:
-            transformer (callable): Descriptor function or object.
-            verbose (bool): Whether to show progress bar.
-        """
+        """Store the descriptor transformer and verbosity setting."""
         super().__init__()
         self.transformer = transformer
         self.verbose = verbose
 
-    def __call__(self, mol: Ensemble, *args: Any, **kwargs: Any) -> np.ndarray | FailedDescriptor:
-        """Compute the descriptor bag for a single molecule.
+    def __call__(self, mols: list[Mol], *args: Any, **kwargs: Any) -> np.ndarray | FailedMolecule:
+        """Compute the raw descriptor bag (one vector per conformer) for a single molecule's bag of conformers."""
+        return self._transform(mols)
 
-        Args:
-            mol: A conformer/fragment/mixture ensemble to compute descriptors for.
-
-        Returns:
-            np.ndarray: One descriptor vector per instance in the ensemble.
-        """
-        return self._transform(mol)
-
-    def _ensemble_to_descriptors(self, ensemble_of_instances: Ensemble) -> np.ndarray:
-        """Convert a molecule into a bag of descriptor vectors."""
-
-        bag = []
-        if isinstance(ensemble_of_instances, ConformerEnsemble):
-            for conf in ensemble_of_instances:
-                x = self.transformer(conf, conformer_id=0)
-                bag.append(x.flatten())
-
-        elif isinstance(ensemble_of_instances, FragmentEnsemble):
-            for frag in ensemble_of_instances:
-                x = self.transformer(frag)
-                bag.append(x.flatten())
-
-        elif isinstance(ensemble_of_instances, MixtureEnsemble):
-            for comp in ensemble_of_instances:
-                x = self.transformer(comp)
-                bag.append(x.flatten())
-
-        else:
-            raise TypeError(f"Unsupported type {type(ensemble_of_instances)}")
-
-        return np.array(bag)
-
-    def _transform(self, mol: Ensemble) -> np.ndarray | FailedDescriptor:
-        """Compute descriptors for a single molecule."""
+    def _transform(self, mols: list[Mol]) -> np.ndarray | FailedMolecule:
+        """Compute the descriptor matrix for one molecule's bag of conformers; failures become a sentinel."""
         try:
-            x = self._ensemble_to_descriptors(mol)
+            bag = [self.transformer(mol, conformer_id=0).flatten() for mol in mols]
+            return np.array(bag)
         except Exception as e:
             print(e)
-            x = FailedDescriptor(mol)
-        return x
+            return FailedMolecule(mols, message="descriptor calculation failed")
 
-    def run(self, list_of_mols: Sequence[Ensemble]) -> list[np.ndarray | FailedDescriptor]:
-        """Compute descriptors for a list of molecules."""
+    def run(self, list_of_confs: Sequence[list[Mol]]) -> list[np.ndarray | FailedMolecule]:
+        """Compute descriptors for every bag, dropping columns that are NaN/extreme for at least one bag."""
 
-        total = len(list_of_mols)
-        results = []
-        for i, mol in enumerate(list_of_mols, 1):
-            results.append(self._transform(mol))
+        total = len(list_of_confs)
+
+        raw_bags = []
+        for i, mols in enumerate(list_of_confs, 1):
+            raw_bags.append(self._transform(mols))
             if self.verbose:
                 print(f"Calculating descriptors: {i}/{total}", end="\r", flush=True)
 
-        if self.verbose:
-            print(f"Calculating descriptors: {total}/{total}")
+        valid_bags = [bag for bag in raw_bags if isinstance(bag, np.ndarray)]
+        if not valid_bags:
+            return raw_bags
 
-        return results
+        stacked = np.vstack(valid_bags).astype(float)
+        stacked[np.abs(stacked) >= _EXTREME_VALUE_THRESHOLD] = np.nan
+
+        keep_mask = ~np.isnan(stacked).any(axis=0)
+        if not keep_mask.all():
+            print(f"Removed {int((~keep_mask).sum())} of {len(keep_mask)} descriptor column(s) with extreme/invalid values.")
+
+        cleaned_bags: list[np.ndarray | FailedMolecule] = []
+        for bag in raw_bags:
+            if not isinstance(bag, np.ndarray):
+                cleaned_bags.append(bag)
+                continue
+            bag = bag.astype(float)
+            bag[np.abs(bag) >= _EXTREME_VALUE_THRESHOLD] = np.nan
+            cleaned_bags.append(bag[:, keep_mask])
+
+        return cleaned_bags

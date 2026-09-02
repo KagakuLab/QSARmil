@@ -11,12 +11,12 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 
-def embed_mol(smiles: str, num_conf: int = 5, seed: int = 42) -> Chem.Mol:
+def embed_mol(smiles: str, num_conf: int = 5, random_seed: int = 42) -> Chem.Mol:
     """Build a real, embedded, force-field-optimized RDKit molecule."""
     mol = Chem.MolFromSmiles(smiles)
     mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
-    params.randomSeed = seed
+    params.randomSeed = random_seed
     conf_ids = AllChem.EmbedMultipleConfs(mol, numConfs=num_conf, params=params)
     for cid in conf_ids:
         AllChem.UFFOptimizeMolecule(mol, confId=cid)
@@ -49,6 +49,7 @@ class MockEstimator:
 
     def _hopt(self, x: Any, y: Any, param_grid: dict[str, Any], verbose: bool = False) -> None:
         self.hopt_called = True
+        self.last_param_grid = param_grid
 
     def fit(self, x: Any, y: Any) -> MockEstimator:
         self.mean_y = float(np.mean(list(y)))
@@ -57,8 +58,9 @@ class MockEstimator:
     def predict(self, x: Any) -> np.ndarray:
         return np.full(len(x), self.mean_y)
 
-    def __call__(self) -> "MockEstimator":
-        """Allow the mock instance to act as a factory."""
+    def __call__(self, accelerator: str | None = None) -> "MockEstimator":
+        """Allow the mock instance to act as a factory; ignores accelerator like a non-milearn mock would."""
+        self.accelerator = accelerator
         return self
 
 

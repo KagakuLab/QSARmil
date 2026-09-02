@@ -1,0 +1,14 @@
+name: qsarmil
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - rdkit
+  - molfeat
+  - click
+  - psutil
+  - pip
+  - pip:
+      - mikit-learn
+      - qsarcons
+      - qsarmil
