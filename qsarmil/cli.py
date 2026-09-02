@@ -66,6 +66,9 @@ def train_predict_command(
 ) -> None:
     """Train a MultiConformerRegressor/Classifier and predict on new SMILES, in one run."""
 
+    if accelerator == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
     train_df = pd.read_csv(train_path)
     if train_df.shape[1] < 2:
         raise click.UsageError(f"{train_path} needs at least 2 columns (SMILES, target); found {train_df.shape[1]}.")

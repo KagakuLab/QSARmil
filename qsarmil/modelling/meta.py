@@ -33,6 +33,9 @@ class MultiConformerEstimator:
         """Build the underlying LazyMIL, defaulting output_folder to a timestamped folder name if not given."""
         super().__init__()
 
+        if accelerator == "cpu":
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
         self.random_seed = random_seed
         self.verbose = verbose
         output_folder = output_folder or datetime.datetime.now().strftime("qsarmil_%d_%m_%Y_%H_%M_%S")  # noqa: DTZ005
