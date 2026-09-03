@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qsarmil"
-version = "1.0.6"
+version = "1.0.7"
 description = "Molecular multi-instance machine learning"
 readme = { file = "README.rst", content-type = "text/x-rst" }
 license = { text = "MIT" }
