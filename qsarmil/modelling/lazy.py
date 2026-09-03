@@ -112,7 +112,9 @@ def generate_conformers(
     mol_list = []
     for smi in smi_list:
         mol = Chem.MolFromSmiles(smi)
-        mol_list.append(mol if mol is not None else FailedMolecule(smi, message="SMILES parsing failed"))
+        if mol is None or mol.GetNumAtoms() == 0:
+            mol = FailedMolecule(smi, message="SMILES parsing failed")
+        mol_list.append(mol)
 
     conf_gen = RDKitConformerGenerator(num_conf=num_conf, num_cpu=num_cpu, verbose=False, random_seed=random_seed)
     conf_list = conf_gen.run(mol_list)
@@ -244,14 +246,20 @@ class LazyMIL:
 
         # Train/val: drop molecules that failed - training needs clean data.
         valid_idx_train = [i for i, c in enumerate(conf_train) if isinstance(c, list)]
+        n_failed_train = len(conf_train) - len(valid_idx_train)
         smi_train = [smi_train[i] for i in valid_idx_train]
         y_train = [y_train[i] for i in valid_idx_train]
         conf_train = [conf_train[i] for i in valid_idx_train]
 
         valid_idx_val = [i for i, c in enumerate(conf_val) if isinstance(c, list)]
+        n_failed_train += len(conf_val) - len(valid_idx_val)
         smi_val = [smi_val[i] for i in valid_idx_val]
         y_val = [y_val[i] for i in valid_idx_val]
         conf_val = [conf_val[i] for i in valid_idx_val]
+
+        if n_failed_train and self.verbose:
+            print(
+                f"{n_failed_train} train molecule(s) could not be processed and will be removed from the training set")
 
         # Keep all test molecules - failures get the training set baseline instead of a real prediction.
         train_baseline = baseline_prediction(y_train, self.task)
@@ -263,7 +271,7 @@ class LazyMIL:
         if n_failed_test and self.verbose:
             print(
                 f"{n_failed_test} test molecule(s) could not be processed and will be predicted "
-                "using the training set baseline value instead."
+                "using the training set baseline value"
             )
 
         result_df_train = pd.DataFrame({"SMILES": smi_train, "Y_TRUE": y_train})
