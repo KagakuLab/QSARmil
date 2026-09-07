@@ -9,47 +9,20 @@ it as a *bag of instances* (e.g. conformers, fragments) and learns directly
 from that structure — letting the model decide which instances matter most
 for a given property.
 
+QSARmil offers two levels of access:
+
+- **Beginner** — a predefined, zero-configuration pipeline. Hand it SMILES
+  and target values, get predictions back. See :doc:`installation` to get
+  set up, then :doc:`tutorials` for the full walkthrough.
+- **Professional** — build a custom pipeline from QSARmil's individual
+  modules (conformer generation, descriptor calculation, MIL methods,
+  hyperparameter optimization, consensus modeling) directly. Each of these
+  is documented in its own page below.
+
 Companion packages `milearn <https://github.com/KagakuLab/milearn>`_ (MIL
 algorithms) and `QSARcons <https://github.com/KagakuLab/QSARcons>`_
 (consensus modeling) power parts of the pipeline under the hood — see
 :doc:`ecosystem` for how the pieces fit together.
-
-Review
-------
-
-A quick status overview of what is ready to use today versus what is still
-under active development.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 15 55
-
-   * - Feature
-     - Status
-     - Notes
-   * - ``MultiConformerRegressor`` / ``MultiConformerClassifier``
-     - TODO
-     - TODO
-   * - Conformer generation
-     - TODO
-     - TODO
-   * - Descriptor calculation
-     - TODO
-     - TODO
-   * - Command-line interface (``train`` / ``predict``)
-     - TODO
-     - TODO
-   * - Key instance detection
-     - TODO
-     - TODO
-   * - Consensus modelling
-     - TODO
-     - TODO
-
-.. note::
-
-   Keep this table current — update it alongside each release rather than
-   letting it drift from the codebase.
 
 .. toctree::
    :maxdepth: 1
@@ -61,8 +34,8 @@ under active development.
    descriptor
    mil
    hyperparameter
-   kid
    consensus
+   kid
    ecosystem
    cli
    tutorials
