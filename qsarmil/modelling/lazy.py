@@ -227,65 +227,70 @@ class LazyMIL:
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Train every descriptor/estimator combination and predict on train/val/test, writing CSVs as it goes."""
 
-        smi_train, y_train = list(smiles_train), list(y_train)
-        smi_val, y_val = list(smiles_val), list(y_val)
-        smi_test = list(smiles_test)
+        smi_train_all, y_train_all = list(smiles_train), list(y_train)
+        smi_val_all, y_val_all = list(smiles_val), list(y_val)
+        smi_test_all = list(smiles_test)
 
-        # 1. Parse SMILES and generate conformers.
         if self.verbose:
             print("Step-1. Conformer generation")
-        smi_all = smi_train + smi_val + smi_test
+        smi_all = smi_train_all + smi_val_all + smi_test_all
         conf_all = generate_conformers(
             smi_all, num_conf=self.num_conf, num_cpu=self.num_cpu, verbose=self.verbose,
             random_seed=self.random_seed,
         )
-        n_train, n_val = len(smi_train), len(smi_val)
-        conf_train = conf_all[:n_train]
-        conf_val = conf_all[n_train : n_train + n_val]
-        conf_test = conf_all[n_train + n_val :]
+        n_train, n_val = len(smi_train_all), len(smi_val_all)
+        conf_train_all = conf_all[:n_train]
+        conf_val_all = conf_all[n_train : n_train + n_val]
+        conf_test_all = conf_all[n_train + n_val :]
 
-        # Train/val: drop molecules that failed - training needs clean data.
-        valid_idx_train = [i for i, c in enumerate(conf_train) if isinstance(c, list)]
-        n_failed_train = len(conf_train) - len(valid_idx_train)
-        smi_train = [smi_train[i] for i in valid_idx_train]
-        y_train = [y_train[i] for i in valid_idx_train]
-        conf_train = [conf_train[i] for i in valid_idx_train]
+        valid_idx_train = [i for i, c in enumerate(conf_train_all) if isinstance(c, list)]
+        valid_idx_val = [i for i, c in enumerate(conf_val_all) if isinstance(c, list)]
+        valid_idx_test = [i for i, c in enumerate(conf_test_all) if isinstance(c, list)]
 
-        valid_idx_val = [i for i, c in enumerate(conf_val) if isinstance(c, list)]
-        n_failed_train += len(conf_val) - len(valid_idx_val)
-        smi_val = [smi_val[i] for i in valid_idx_val]
-        y_val = [y_val[i] for i in valid_idx_val]
-        conf_val = [conf_val[i] for i in valid_idx_val]
+        smi_train = [smi_train_all[i] for i in valid_idx_train]
+        y_train = [y_train_all[i] for i in valid_idx_train]
+        conf_train = [conf_train_all[i] for i in valid_idx_train]
+
+        smi_val = [smi_val_all[i] for i in valid_idx_val]
+        y_val = [y_val_all[i] for i in valid_idx_val]
+        conf_val = [conf_val_all[i] for i in valid_idx_val]
+
+        smi_test = [smi_test_all[i] for i in valid_idx_test]
+        conf_test = [conf_test_all[i] for i in valid_idx_test]
+
+        train_baseline = baseline_prediction(y_train, self.task)
+
+        n_failed_train = len(conf_train_all) - len(valid_idx_train)
+        n_failed_val = len(conf_val_all) - len(valid_idx_val)
+        n_failed_test = len(conf_test_all) - len(valid_idx_test)
 
         if n_failed_train and self.verbose:
             print(
-                f"{n_failed_train} train molecule(s) could not be processed and will be removed from the training set")
-
-        # Keep all test molecules - failures get the training set baseline instead of a real prediction.
-        train_baseline = baseline_prediction(y_train, self.task)
-        valid_idx_test = [i for i, c in enumerate(conf_test) if isinstance(c, list)]
-        smi_test_valid = [smi_test[i] for i in valid_idx_test]
-        conf_test_valid = [conf_test[i] for i in valid_idx_test]
-
-        n_failed_test = len(smi_test) - len(smi_test_valid)
+                f"{n_failed_train} training molecule(s) could not be processed and will be predicted "
+                "using the training set baseline value"
+            )
+        if n_failed_val and self.verbose:
+            print(
+                f"{n_failed_val} validation molecule(s) could not be processed and will be predicted "
+                "using the training set baseline value"
+            )
         if n_failed_test and self.verbose:
             print(
                 f"{n_failed_test} test molecule(s) could not be processed and will be predicted "
                 "using the training set baseline value"
             )
 
-        result_df_train = pd.DataFrame({"SMILES": smi_train, "Y_TRUE": y_train})
-        result_df_val = pd.DataFrame({"SMILES": smi_val, "Y_TRUE": y_val})
-        result_df_test = pd.DataFrame({"SMILES": smi_test})
+        result_df_train = pd.DataFrame({"SMILES": smi_train_all, "Y_TRUE": y_train_all})
+        result_df_val = pd.DataFrame({"SMILES": smi_val_all, "Y_TRUE": y_val_all})
+        result_df_test = pd.DataFrame({"SMILES": smi_test_all})
 
-        # 2. Calculate descriptors for train+val+test together, once per descriptor type.
         if self.verbose:
             print("Step-2. Descriptor calculation")
 
         ready_descriptors: dict[str, tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]] = {}
         for desc_name, desc_factory in DESCRIPTORS.items():
             desc_calc = desc_factory()
-            x_all = calculate_descriptors(conf_train + conf_val + conf_test_valid, desc_calc)
+            x_all = calculate_descriptors(conf_train + conf_val + conf_test, desc_calc)
             x_train = x_all[: len(conf_train)]
             x_val = x_all[len(conf_train) : len(conf_train) + len(conf_val)]
             x_test = x_all[len(conf_train) + len(conf_val) :]
@@ -294,7 +299,6 @@ class LazyMIL:
             if self.verbose:
                 print(f"{desc_name}: done")
 
-        # 3. Train every descriptor/estimator combination and predict on train/val/test.
         if self.verbose:
             print("Step-3. Individual model training")
 
@@ -313,11 +317,13 @@ class LazyMIL:
                         random_seed=self.random_seed, accelerator=self.accelerator,
                     )
 
-                preds_by_smi = dict(zip(smi_test_valid, pred_test))
+                preds_train_by_smi = dict(zip(smi_train, pred_train))
+                preds_val_by_smi = dict(zip(smi_val, pred_val))
+                preds_test_by_smi = dict(zip(smi_test, pred_test))
 
-                result_df_train[model_name] = pred_train
-                result_df_val[model_name] = pred_val
-                result_df_test[model_name] = [preds_by_smi.get(smi, train_baseline) for smi in smi_test]
+                result_df_train[model_name] = [preds_train_by_smi.get(smi, train_baseline) for smi in smi_train_all]
+                result_df_val[model_name] = [preds_val_by_smi.get(smi, train_baseline) for smi in smi_val_all]
+                result_df_test[model_name] = [preds_test_by_smi.get(smi, train_baseline) for smi in smi_test_all]
 
                 result_df_train.to_csv(os.path.join(self.output_folder, "train.csv"), index=False)
                 result_df_val.to_csv(os.path.join(self.output_folder, "val.csv"), index=False)

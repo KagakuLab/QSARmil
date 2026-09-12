@@ -48,7 +48,7 @@ def test_generate_conformers_random_seed_affects_output():
 def test_generate_conformers_verbose_reports_summary(capsys):
     generate_conformers(["CCO", "not_a_valid_smiles!!!"], num_conf=2, num_cpu=1, verbose=True)
     captured = capsys.readouterr()
-    assert "Generated conformers for 1 of 2 molecules." in captured.out
+    assert "Generated conformers for 1 of 2 molecules" in captured.out
 
 
 def test_generate_conformers_quiet_prints_nothing(capsys):
@@ -317,7 +317,7 @@ def test_lazymil_run_continuous_verbose(monkeypatch, tmp_path, capsys):
     lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
     result_train, result_val, result_test = lazy.run(smi_train, y_train, smi_val, y_val, smi_test)
 
-    assert len(result_train) == 3  # the invalid SMILES got dropped
+    assert len(result_train) == 4  # train rows are never dropped either, same as test
     assert len(result_val) == 1
     assert len(result_test) == 1  # test rows are never dropped
     assert "RDKitGEOM|Mock" in result_test.columns
@@ -325,8 +325,8 @@ def test_lazymil_run_continuous_verbose(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "Step-1. Conformer generation" in captured.out
     assert "Step-2. Descriptor calculation" in captured.out
-    assert "Step-3. Model training" in captured.out
-    assert "Generated conformers for 5 of 6 molecules." in captured.out
+    assert "Step-3. Individual model training" in captured.out
+    assert "Generated conformers for 5 of 6 molecules" in captured.out
     assert "RDKitGEOM: done" in captured.out
     assert "[1/1] RDKitGEOM|Mock" in captured.out
     assert (tmp_path / "out" / "train.csv").exists()
@@ -434,6 +434,34 @@ def test_lazymil_run_test_predictions_use_baseline_for_failed_molecules(monkeypa
 
     captured = capsys.readouterr()
     assert "1 test molecule(s) could not be processed" in captured.out
+
+
+def test_lazymil_run_train_predictions_use_baseline_for_failed_molecules(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(lazy_mod, "DESCRIPTORS", _fast_descriptors())
+
+    smi_train = ["CCO", "c1ccccc1", "not_a_valid_smiles!!!", "CCN"]
+    y_train = [1.1, 2.2, 3.3, 4.4]
+    smi_val = ["CCCl", "not_a_valid_smiles!!!"]
+    y_val = [5.5, 6.6]
+
+    lazy = LazyMIL(
+        task="continuous", hopt=False, num_conf=2, num_cpu=1, output_folder=str(tmp_path / "out"), verbose=True
+    )
+    lazy.ESTIMATORS = {"Mock": MockEstimator(supports_hopt=False)}
+    result_train, result_val, _ = lazy.run(smi_train, y_train, smi_val, y_val, ["CCF"])
+
+    valid_y_train = [1.1, 2.2, 4.4]  # the failed molecule's target is excluded from the baseline itself
+    baseline = baseline_prediction(valid_y_train, "continuous")
+
+    assert len(result_train) == 4  # train rows are never dropped, even on failure
+    assert result_train["RDKitGEOM|Mock"].iloc[2] == pytest.approx(baseline)
+
+    # result_val stays valid-only - it feeds the consensus search directly and must never see a
+    # baseline-filled row that could skew model selection.
+    assert len(result_val) == 1
+
+    captured = capsys.readouterr()
+    assert "2 train molecule(s) could not be processed" in captured.out
 
 
 def test_lazymil_run_test_predictions_silent_when_nothing_fails(monkeypatch, tmp_path, capsys):

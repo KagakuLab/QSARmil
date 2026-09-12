@@ -81,7 +81,7 @@ def test_train_predict_regression(monkeypatch, tmp_path, regression_csv):
     assert (output_folder / "val.csv").exists()
 
     test_df = pd.read_csv(output_folder / "test.csv")
-    assert "prediction" in test_df.columns
+    assert "RDKitGEOM|Mock" in test_df.columns
     assert len(test_df) == 5
     assert list(test_df["SMILES"]) == ["CCO", "c1ccccc1", "CCN", "CCC", "CCCl"]
 
@@ -105,7 +105,7 @@ def test_train_predict_classification(monkeypatch, tmp_path, classification_csv)
     )
     assert result.exit_code == 0, result.output
     test_df = pd.read_csv(output_folder / "test.csv")
-    assert "prediction" in test_df.columns
+    assert "RDKitGEOM|Mock" in test_df.columns
     assert len(test_df) == 5
 
 

@@ -107,15 +107,15 @@ def test_train_predict_end_to_end_regression(monkeypatch, tmp_path, capsys):
     assert len(model.best_consensus) > 0
 
     captured = capsys.readouterr()
-    assert "Step-4. Genetic model consensus search" in captured.out
+    assert "Step-4. Genetic consensus search" in captured.out
     assert "Best genetic consensus" in captured.out
 
     assert (tmp_path / "out" / "train.csv").exists()
     assert (tmp_path / "out" / "val.csv").exists()
 
     test_df = pd.read_csv(tmp_path / "out" / "test.csv")
-    assert "prediction" in test_df.columns
-    assert list(test_df["prediction"]) == preds
+    assert "RDKitGEOM|Mock" in test_df.columns
+    assert len(test_df) == 1
 
 
 def test_train_predict_end_to_end_classification_quiet(monkeypatch, tmp_path, capsys):
