@@ -91,10 +91,6 @@ class MultiConformerEstimator:
                 print(f"  -{name}")
 
         x_test = result_df_test.iloc[:, 1:]
-        missing_cols = [c for c in self.best_consensus if c not in x_test.columns]
-        if missing_cols:
-            raise ValueError("Consensus references missing model columns: " + ", ".join(missing_cols))
-
         pred_test = list(self._consensus_search.predict(x_test[self.best_consensus]))
         result_df_test.to_csv(os.path.join(self.output_folder, "test.csv"), index=False)
 
